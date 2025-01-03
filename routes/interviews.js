@@ -29,13 +29,10 @@ const authenticateUser = async (req, res, next) => {
 router.get('/:id/verify-access', async (req, res) => {
     try {
         const { id } = req.params;
-        console.log(`[DEBUG] Verifying access for interview: ${id}`);
-
         const db = admin.firestore();
         const interviewDoc = await db.collection('interviews').doc(id).get();
 
         if (!interviewDoc.exists) {
-            console.log(`[DEBUG] Interview not found: ${id}`);
             return res.status(404).json({ 
                 error: 'Interview not found',
                 details: 'No interview exists with this ID'
@@ -44,15 +41,15 @@ router.get('/:id/verify-access', async (req, res) => {
 
         const interviewData = interviewDoc.data();
 
-        if (interviewData.status === 'cancelled' || interviewData.status === 'completed') {
-            console.log(`[DEBUG] Interview is ${interviewData.status}`);
-            return res.status(400).json({ 
-                error: `Interview has been ${interviewData.status}`,
-                status: interviewData.status
+        // Validate interview status
+        if (!['scheduled', 'invited'].includes(interviewData.status)) {
+            return res.status(400).json({
+                error: 'Interview is not active',
+                details: `Current status: ${interviewData.status}`
             });
         }
 
-        console.log('[DEBUG] Interview access verified successfully');
+        // Return key interview details
         return res.json({
             id: interviewDoc.id,
             candidateName: interviewData.candidateName,
@@ -60,7 +57,6 @@ router.get('/:id/verify-access', async (req, res) => {
             type: interviewData.type || 'technical',
             level: interviewData.level || 'mid',
             duration: interviewData.duration || 45,
-            questionCount: interviewData.questionCount || 5,
             status: interviewData.status
         });
     } catch (error) {

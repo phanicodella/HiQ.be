@@ -50,14 +50,43 @@ app.use((req, res, next) => {
     next();
 });
 
-// Interview Room Route - Must come before static file serving
-// In backend/server.js, modify the interview route handler
+// Interview Room Route Handler
 app.get('/interview/:id', async (req, res) => {
     try {
         const { id } = req.params;
         console.log(`[DEBUG] Accessing interview room: ${id}`);
 
-        // Send the interview room template with explicit headers
+        const db = admin.firestore();
+        const interviewDoc = await db.collection('interviews').doc(id).get();
+
+        if (!interviewDoc.exists) {
+            console.log(`[DEBUG] Interview not found: ${id}`);
+            return res.status(404).send('Interview not found');
+        }
+
+        const interviewData = interviewDoc.data();
+        
+        // Verify interview status
+        if (!['scheduled', 'invited'].includes(interviewData.status)) {
+            console.log(`[DEBUG] Invalid interview status: ${interviewData.status}`);
+            return res.status(400).send('Invalid interview status');
+        }
+
+        // Verify interview time window
+        const interviewTime = interviewData.date.toDate();
+        const now = new Date();
+        const timeDiff = interviewTime.getTime() - now.getTime();
+        
+        // Allow access 15 minutes before and until 1 hour after
+        const earlyAccessWindow = 15 * 60 * 1000; // 15 minutes
+        const lateAccessWindow = 60 * 60 * 1000;  // 1 hour
+
+        if (timeDiff < -lateAccessWindow || timeDiff > earlyAccessWindow) {
+            console.log(`[DEBUG] Interview time window invalid for ${id}`);
+            return res.status(403).send('Interview is not currently accessible');
+        }
+
+        // Set headers to prevent caching
         res.set({
             'Content-Type': 'text/html',
             'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -65,10 +94,11 @@ app.get('/interview/:id', async (req, res) => {
             'Expires': '0'
         });
 
+        // Serve the interview room template
         res.sendFile(path.join(__dirname, '..', 'frontend', 'public', 'templates', 'interview-room.html'));
     } catch (error) {
-        console.error('[DEBUG] Interview Room Error:', error);
-        res.status(500).send('Server error');
+        console.error('[DEBUG] Interview Room Access Error:', error);
+        res.status(500).send('Server error during interview access');
     }
 });
 
