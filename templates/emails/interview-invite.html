@@ -1,0 +1,31 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .button { 
+            background-color: #0d6efd;
+            color: white;
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 5px;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Interview Confirmation</h2>
+        <p>Hello {{candidateName}},</p>
+        <p>Your interview has been scheduled with TalentSync.</p>
+        <p><strong>Date:</strong> {{date}}</p>
+        <p><strong>Meeting Link:</strong></p>
+        <p><a href="{{meetingLink}}" class="button">Join Interview</a></p>
+        <p>Please join the meeting 5 minutes before the scheduled time.</p>
+        <hr>
+        <p>Best regards,<br>TalentSync Team</p>
+    </div>
+</body>
+</html>

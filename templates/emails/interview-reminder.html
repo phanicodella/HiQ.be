@@ -1,0 +1,183 @@
+// /backend/templates/emails/interview-reminder.html
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .button { 
+            background-color: #0d6efd;
+            color: white;
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 5px;
+            display: inline-block;
+        }
+        .alert {
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        .checklist {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        .checklist ul {
+            padding-left: 20px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Interview Reminder</h2>
+        <div class="alert">
+            Your interview starts in {{timeUntil}}
+        </div>
+        <p>Hello {{candidateName}},</p>
+        <p>This is a reminder about your upcoming interview with TalentSync.</p>
+        <p><strong>Date:</strong> {{date}}</p>
+        <div class="checklist">
+            <h3>Pre-Interview Checklist:</h3>
+            <ul>
+                <li>Test your camera and microphone</li>
+                <li>Ensure stable internet connection</li>
+                <li>Find a quiet, well-lit space</li>
+                <li>Have your resume ready</li>
+            </ul>
+        </div>
+        <p><a href="{{meetingLink}}" class="button">Join Interview</a></p>
+        <hr>
+        <p>Best regards,<br>TalentSync Team</p>
+    </div>
+</body>
+</html>
+
+// /backend/templates/emails/interview-cancellation.html
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .button { 
+            background-color: #0d6efd;
+            color: white;
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 5px;
+            display: inline-block;
+        }
+        .notice {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+            border-left: 4px solid #dc3545;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Interview Cancellation Notice</h2>
+        <div class="notice">
+            <p>Hello {{candidateName}},</p>
+            <p>We regret to inform you that your interview scheduled for <strong>{{date}}</strong> has been cancelled.</p>
+            {{#if reason}}
+            <p><strong>Reason:</strong> {{reason}}</p>
+            {{/if}}
+        </div>
+        <p>Our team will be in touch shortly to reschedule at a more convenient time.</p>
+        <p>If you'd like to reschedule now, you can use the link below:</p>
+        <p><a href="{{rescheduleLink}}" class="button">Reschedule Interview</a></p>
+        <hr>
+        <p>We apologize for any inconvenience caused.</p>
+        <p>Best regards,<br>TalentSync Team</p>
+    </div>
+</body>
+</html>
+
+// /backend/templates/emails/feedback-summary.html
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .score-container {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        .score-bar {
+            background-color: #e9ecef;
+            height: 20px;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .score-fill {
+            height: 100%;
+            background-color: #0d6efd;
+            transition: width 0.5s ease-in-out;
+        }
+        .feedback-section {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: white;
+            border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Interview Feedback Summary</h2>
+        <p>Hello {{candidateName}},</p>
+        <p>Thank you for participating in the interview. Here's your performance summary:</p>
+
+        <div class="score-container">
+            <h3>Technical Skills</h3>
+            <div class="score-bar">
+                <div class="score-fill" style="width: {{technicalScore}}%"></div>
+            </div>
+            <p>Score: {{technicalScore}}%</p>
+            
+            <h3>Communication Skills</h3>
+            <div class="score-bar">
+                <div class="score-fill" style="width: {{communicationScore}}%"></div>
+            </div>
+            <p>Score: {{communicationScore}}%</p>
+        </div>
+
+        <div class="feedback-section">
+            <h3>Key Observations</h3>
+            <ul>
+                {{#each observations}}
+                <li>{{this}}</li>
+                {{/each}}
+            </ul>
+        </div>
+
+        {{#if recommendations}}
+        <div class="feedback-section">
+            <h3>Recommendations</h3>
+            <ul>
+                {{#each recommendations}}
+                <li>{{this}}</li>
+                {{/each}}
+            </ul>
+        </div>
+        {{/if}}
+
+        <p>Our team will review your overall performance and get back to you with next steps within {{responseTime}} business days.</p>
+        <hr>
+        <p>Best regards,<br>TalentSync Team</p>
+    </div>
+</body>
+</html>

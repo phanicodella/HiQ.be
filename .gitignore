@@ -1,0 +1,7 @@
+node_modules
+node_modules
+.env
+combined.log
+error.log
+logs/email-combined.log
+logs/email-error.log
