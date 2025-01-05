@@ -1,0 +1,29 @@
+{
+  "name": "hiq-ai-backend",
+  "version": "1.0.0",
+  "description": "HiQ AI Interview System Backend",
+  "main": "src/app.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js",
+    "build": "echo \"No build step required for backend\"",
+    "test": "echo \"No test specified\" && exit 0"
+  },
+  "dependencies": {
+    "@aws-sdk/client-ses": "^3.525.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "firebase-admin": "^12.0.0",
+    "helmet": "^7.1.0",
+    "morgan": "^1.10.0",
+    "nanoid": "^5.0.9",
+    "openai": "^4.28.0",
+    "resend": "^4.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  }
+}
