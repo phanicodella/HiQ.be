@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-ses": "^3.525.0",
+    "@daily-co/daily-js": "^0.74.0",
     "axios": "^1.7.9",
     "compression": "^1.7.5",
     "cors": "^2.8.5",

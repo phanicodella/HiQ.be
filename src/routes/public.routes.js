@@ -13,6 +13,8 @@ const upload = multer({
 
 // Firebase storage bucket reference
 const bucket = getStorage().bucket();
+const DAILY_API_KEY = process.env.DAILY_API_KEY;
+
 
 // AssemblyAI configuration
 const ASSEMBLY_API_KEY = process.env.ASSEMBLY_API_KEY;
@@ -52,22 +54,35 @@ const questions = [
 ];
 
 // Get interview details
-router.get('/interviews/:sessionId', async (req, res) => {
+router.get('/interviews/:sessionId/meeting-url', async (req, res) => {
   try {
-    const interview = {
-      id: req.params.sessionId,
-      totalQuestions: questions.length,
-      status: 'pending'
-    };
-    res.json(interview);
+    const response = await axios.post(
+      'https://api.daily.co/v1/rooms',
+      { properties: { enable_screenshare: true, enable_recording: 'cloud' } },
+      { headers: { Authorization: `Bearer ${DAILY_API_KEY}` } }
+    );
+
+    const meetingUrl = response.data.url;
+    if (!meetingUrl) {
+      throw new Error('Meeting URL missing in Daily.co API response');
+    }
+
+    console.log('Generated Daily.co meeting URL:', meetingUrl);
+    res.json({ url: meetingUrl });
   } catch (error) {
-    console.error('Error fetching interview:', error);
-    res.status(500).json({ error: 'Failed to fetch interview details' });
+    console.error('Failed to generate meeting URL:', error.response?.data || error.message);
+    res.status(500).json({
+      error: 'Failed to generate meeting URL',
+      details: error.response?.data || error.message,
+    });
   }
 });
 
+
+
+
 // Start interview
-router.post('/interviews/:sessionId/start', async (req, res) => {
+router.post('/api/public/interviews/:sessionId/start', async (req, res) => {
   try {
     const question = questions[0];
     res.json({ 
@@ -82,7 +97,7 @@ router.post('/interviews/:sessionId/start', async (req, res) => {
 });
 
 // Submit answer
-router.post('/interviews/:sessionId/answer', upload.single('audio'), async (req, res) => {
+router.post('/api/public/interviews/:sessionId/answer', upload.single('audio'), async (req, res) => {
   try {
     const { sessionId } = req.params;
     const { transcript } = req.body;
@@ -120,7 +135,7 @@ router.post('/interviews/:sessionId/answer', upload.single('audio'), async (req,
 });
 
 // Get next question
-router.get('/interviews/:sessionId/next-question', async (req, res) => {
+router.get('/api/public/interviews/:sessionId/next-question', async (req, res) => {
   try {
     const currentQuestionNumber = parseInt(req.query.current || 1);
     
@@ -130,6 +145,29 @@ router.get('/interviews/:sessionId/next-question', async (req, res) => {
         completedAt: new Date().toISOString()
       });
     }
+// backend/src/routes/public.routes.js
+
+const router = express.Router();
+
+// Daily.co API credentials
+
+// Generate Daily.co meeting URL
+router.get('/interviews/:sessionId/meeting-url', async (req, res) => {
+    try {
+        const response = await axios.post(
+            'https://api.daily.co/v1/rooms',
+            { properties: { enable_screenshare: true, enable_recording: 'cloud' } },
+            { headers: { Authorization: `Bearer ${DAILY_API_KEY}` } }
+        );
+
+        const meetingUrl = response.data.url;
+        res.json({ url: meetingUrl });
+    } catch (error) {
+        console.error('Failed to create meeting room:', error);
+        res.status(500).json({ error: 'Failed to generate meeting URL' });
+    }
+});
+
 
     const nextQuestion = questions[currentQuestionNumber];
     res.json({
