@@ -1,9 +1,16 @@
-// backend/src/routes/public.routes.
+// backend/src/routes/public.routes.js
+
 import express from 'express';
-const router = express.Router();
 import multer from 'multer';
-import { getStorage } from 'firebase-admin/storage';
 import axios from 'axios';
+import { getStorage } from 'firebase-admin/storage';
+import { db, admin } from '../config/firebase.js';
+import { openAIService } from '../services/openai.service.js';
+import { rekognition } from '../config/aws.js';
+
+const router = express.Router();
+
+// Multer configuration
 const upload = multer({ 
   storage: multer.memoryStorage(),
   limits: {
@@ -11,20 +18,145 @@ const upload = multer({
   }
 });
 
-// Firebase storage bucket reference
-const bucket = getStorage().bucket();
+// API Keys and Configuration
 const DAILY_API_KEY = process.env.DAILY_API_KEY;
-
-
-// AssemblyAI configuration
 const ASSEMBLY_API_KEY = process.env.ASSEMBLY_API_KEY;
 
-// Get real-time transcription token
+/**
+ * Real-time Speech Analysis
+ */
+router.post('/speech-analysis', upload.single('audio'), async (req, res) => {
+  try {
+    const { sessionId, questionId } = req.body;
+    const audioBlob = req.file;
+
+    if (!audioBlob) {
+      return res.status(400).json({ error: 'Audio data required' });
+    }
+
+    const transcriptionResponse = await axios.post(
+      'https://api.assemblyai.com/v2/stream',
+      audioBlob.buffer,
+      {
+        headers: {
+          'Authorization': ASSEMBLY_API_KEY,
+          'Content-Type': 'application/octet-stream'
+        },
+        params: {
+          sample_rate: 16000
+        }
+      }
+    );
+
+    const analysis = {
+      timestamp: new Date(),
+      questionId,
+      metrics: {
+        sentiment: transcriptionResponse.data.sentiment,
+        confidence: transcriptionResponse.data.confidence,
+        speed: transcriptionResponse.data.words_per_minute,
+        clarity: transcriptionResponse.data.quality_score
+      }
+    };
+
+    const interviews = await db.collection('interviews')
+      .where('sessionId', '==', sessionId)
+      .limit(1)
+      .get();
+
+    if (!interviews.empty) {
+      await interviews.docs[0].ref.update({
+        speechAnalysis: admin.firestore.FieldValue.arrayUnion(analysis)
+      });
+    }
+
+    res.json({ success: true, analysis });
+
+  } catch (error) {
+    console.error('Speech analysis error:', error);
+    res.status(500).json({
+      error: 'Speech analysis failed',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * Fraud Detection Analysis
+ */
+router.post('/fraud-detection', upload.single('frame'), async (req, res) => {
+  try {
+    const { sessionId, timestamp } = req.body;
+    const frameBlob = req.file;
+
+    if (!frameBlob) {
+      return res.status(400).json({ error: 'Video frame required' });
+    }
+
+    const detectFacesResponse = await rekognition.detectFaces({
+      Image: {
+        Bytes: frameBlob.buffer
+      },
+      Attributes: ['ALL']
+    }).promise();
+
+    const analysis = {
+      timestamp: new Date(timestamp),
+      metrics: {
+        facesDetected: detectFacesResponse.FaceDetails.length,
+        isValidFrame: true,
+        confidence: detectFacesResponse.FaceDetails[0]?.Confidence || 0,
+        warnings: []
+      }
+    };
+
+    if (detectFacesResponse.FaceDetails.length > 1) {
+      analysis.metrics.isValidFrame = false;
+      analysis.metrics.warnings.push('Multiple faces detected');
+    }
+
+    if (detectFacesResponse.FaceDetails.length === 0) {
+      analysis.metrics.isValidFrame = false;
+      analysis.metrics.warnings.push('No face detected');
+    }
+
+    const interviews = await db.collection('interviews')
+      .where('sessionId', '==', sessionId)
+      .limit(1)
+      .get();
+
+    if (!interviews.empty) {
+      await interviews.docs[0].ref.update({
+        fraudDetection: admin.firestore.FieldValue.arrayUnion(analysis)
+      });
+
+      if (!analysis.metrics.isValidFrame) {
+        await interviews.docs[0].ref.update({
+          fraudDetected: true,
+          fraudWarnings: admin.firestore.FieldValue.arrayUnion(...analysis.metrics.warnings)
+        });
+      }
+    }
+
+    res.json({ success: true, analysis });
+
+  } catch (error) {
+    console.error('Fraud detection error:', error);
+    res.status(500).json({
+      error: 'Fraud detection failed',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * AssemblyAI Transcription Token
+ */
 router.post('/transcription-token', async (req, res) => {
   try {
     const response = await axios.post(
       'https://api.assemblyai.com/v2/realtime/token',
-      { expires_in: 3600 },  // Token expires in 1 hour
+      { expires_in: 3600 },
       {
         headers: {
           'Authorization': ASSEMBLY_API_KEY,
@@ -33,7 +165,6 @@ router.post('/transcription-token', async (req, res) => {
       }
     );
     
-    console.log('Got transcription token:', response.data);
     res.json({ token: response.data.token });
   } catch (error) {
     console.error('Error getting transcription token:', error.response?.data || error);
@@ -44,22 +175,31 @@ router.post('/transcription-token', async (req, res) => {
   }
 });
 
-// Interview questions (in production, fetch from database)
-const questions = [
-  { id: 1, text: "Tell me about yourself and your background." },
-  { id: 2, text: "What are your greatest strengths?" },
-  { id: 3, text: "Why are you interested in this position?" },
-  { id: 4, text: "Where do you see yourself in five years?" },
-  { id: 5, text: "Describe a challenging situation you've faced at work and how you handled it." }
-];
-
-// Get interview details
+/**
+ * Daily.co Meeting URL Generation
+ */
 router.get('/interviews/:sessionId/meeting-url', async (req, res) => {
   try {
+    const { sessionId } = req.params;
+
     const response = await axios.post(
       'https://api.daily.co/v1/rooms',
-      { properties: { enable_screenshare: true, enable_recording: 'cloud' } },
-      { headers: { Authorization: `Bearer ${DAILY_API_KEY}` } }
+      {
+        name: `interview-${sessionId}`,
+        properties: {
+          enable_screenshare: true,
+          enable_recording: 'cloud',
+          exp: Math.floor(Date.now() / 1000) + 3600, // Expire in 1 hour
+          max_participants: 2,
+          enable_chat: false
+        }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${DAILY_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
     );
 
     const meetingUrl = response.data.url;
@@ -67,119 +207,222 @@ router.get('/interviews/:sessionId/meeting-url', async (req, res) => {
       throw new Error('Meeting URL missing in Daily.co API response');
     }
 
-    console.log('Generated Daily.co meeting URL:', meetingUrl);
+    // Store meeting URL in interview document
+    const interviews = await db.collection('interviews')
+      .where('sessionId', '==', sessionId)
+      .limit(1)
+      .get();
+
+    if (!interviews.empty) {
+      await interviews.docs[0].ref.update({
+        meetingUrl,
+        meetingCreatedAt: new Date()
+      });
+    }
+
     res.json({ url: meetingUrl });
   } catch (error) {
     console.error('Failed to generate meeting URL:', error.response?.data || error.message);
     res.status(500).json({
       error: 'Failed to generate meeting URL',
-      details: error.response?.data || error.message,
+      details: error.response?.data || error.message
     });
   }
 });
 
-
-
-
-// Start interview
-router.post('/api/public/interviews/:sessionId/start', async (req, res) => {
+/**
+ * Get/Generate Interview Questions
+ */
+router.get('/interviews/:sessionId/questions', async (req, res) => {
   try {
-    const question = questions[0];
+    const { sessionId } = req.params;
+
+    const interviews = await db.collection('interviews')
+      .where('sessionId', '==', sessionId)
+      .limit(1)
+      .get();
+
+    if (interviews.empty) {
+      return res.status(404).json({ 
+        error: 'Interview not found' 
+      });
+    }
+
+    const interviewDoc = interviews.docs[0];
+    const interviewData = interviewDoc.data();
+    
+    if (interviewData.questions?.length > 0) {
+      return res.json({ 
+        questions: interviewData.questions,
+        cached: true 
+      });
+    }
+
+    const questions = await openAIService.generateQuestions(
+      interviewData.type || 'technical',
+      interviewData.level || 'mid'
+    );
+
+    await interviewDoc.ref.update({
+      questions,
+      questionsGeneratedAt: new Date()
+    });
+
     res.json({ 
-      question, 
+      questions,
+      cached: false 
+    });
+  } catch (error) {
+    console.error('Question generation error:', error);
+    res.status(500).json({ 
+      error: 'Failed to generate questions',
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * Start Interview
+ */
+router.post('/interviews/:sessionId/start', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    
+    const interviews = await db.collection('interviews')
+      .where('sessionId', '==', sessionId)
+      .where('status', '==', 'scheduled')
+      .limit(1)
+      .get();
+
+    if (interviews.empty) {
+      return res.status(404).json({ 
+        error: 'Interview not found or already in progress' 
+      });
+    }
+
+    const interviewRef = interviews.docs[0].ref;
+    const interviewData = interviews.docs[0].data();
+
+    if (!interviewData.questions?.length) {
+      return res.status(400).json({ 
+        error: 'Interview questions not yet generated' 
+      });
+    }
+
+    await interviewRef.update({
+      status: 'in_progress',
+      startedAt: new Date(),
+      currentQuestionId: 1
+    });
+
+    res.json({ 
+      question: interviewData.questions[0],
       questionNumber: 1,
-      totalQuestions: questions.length 
+      totalQuestions: interviewData.questions.length 
     });
   } catch (error) {
     console.error('Error starting interview:', error);
-    res.status(500).json({ error: 'Failed to start interview' });
+    res.status(500).json({ 
+      error: 'Failed to start interview',
+      details: error.message 
+    });
   }
 });
 
-// Submit answer
-router.post('/api/public/interviews/:sessionId/answer', upload.single('audio'), async (req, res) => {
+/**
+ * Submit Answer
+ */
+router.post('/interviews/:sessionId/answer', 
+  upload.fields([
+    { name: 'audio', maxCount: 1 },
+    { name: 'video', maxCount: 1 }
+  ]), 
+  async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      const { transcript, questionId, behaviorAnalysis } = req.body;
+
+      const interviews = await db.collection('interviews')
+        .where('sessionId', '==', sessionId)
+        .limit(1)
+        .get();
+
+      if (!interviews.empty) {
+        const answer = {
+          questionId: parseInt(questionId),
+          transcript,
+          timestamp: new Date(),
+          behaviorAnalysis: behaviorAnalysis ? JSON.parse(behaviorAnalysis) : null
+        };
+
+        await interviews.docs[0].ref.update({
+          answers: admin.firestore.FieldValue.arrayUnion(answer),
+          lastAnswerAt: new Date()
+        });
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Error processing answer:', error);
+      res.status(500).json({ 
+        error: 'Failed to process answer',
+        details: error.message 
+      });
+    }
+});
+
+/**
+ * Get Next Question
+ */
+router.get('/interviews/:sessionId/next-question', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const { transcript } = req.body;
-    const audioFile = req.file;
+    const currentQuestionId = parseInt(req.query.current || '1');
 
-    if (!audioFile) {
-      return res.status(400).json({ error: 'No audio file provided' });
+    const interviews = await db.collection('interviews')
+      .where('sessionId', '==', sessionId)
+      .limit(1)
+      .get();
+
+    if (interviews.empty) {
+      return res.status(404).json({ 
+        error: 'Interview not found' 
+      });
     }
 
-    // Upload audio to Firebase Storage
-    const fileName = `interviews/${sessionId}/${Date.now()}.webm`;
-    const file = bucket.file(fileName);
+    const interviewData = interviews.docs[0].data();
     
-    await file.save(audioFile.buffer, {
-      metadata: {
-        contentType: 'audio/webm',
-        customMetadata: {
-          transcript: transcript || '',
-          uploadedAt: new Date().toISOString()
-        }
-      }
-    });
+    if (currentQuestionId >= interviewData.questions.length) {
+      await interviews.docs[0].ref.update({
+        status: 'completed',
+        completedAt: new Date()
+      });
 
-    // Get signed URL for the audio file
-    const [url] = await file.getSignedUrl({
-      action: 'read',
-      expires: Date.now() + 7 * 24 * 60 * 60 * 1000 // 1 week
-    });
-
-    res.json({ success: true, audioUrl: url });
-  } catch (error) {
-    console.error('Error processing answer:', error);
-    res.status(500).json({ error: 'Failed to process answer' });
-  }
-});
-
-// Get next question
-router.get('/api/public/interviews/:sessionId/next-question', async (req, res) => {
-  try {
-    const currentQuestionNumber = parseInt(req.query.current || 1);
-    
-    if (currentQuestionNumber >= questions.length) {
       return res.json({ 
         isComplete: true,
         completedAt: new Date().toISOString()
       });
     }
-// backend/src/routes/public.routes.js
 
-const router = express.Router();
+    const nextQuestion = interviewData.questions[currentQuestionId];
+    await interviews.docs[0].ref.update({
+      currentQuestionId: currentQuestionId + 1,
+      lastQuestionAt: new Date()
+    });
 
-// Daily.co API credentials
-
-// Generate Daily.co meeting URL
-router.get('/interviews/:sessionId/meeting-url', async (req, res) => {
-    try {
-        const response = await axios.post(
-            'https://api.daily.co/v1/rooms',
-            { properties: { enable_screenshare: true, enable_recording: 'cloud' } },
-            { headers: { Authorization: `Bearer ${DAILY_API_KEY}` } }
-        );
-
-        const meetingUrl = response.data.url;
-        res.json({ url: meetingUrl });
-    } catch (error) {
-        console.error('Failed to create meeting room:', error);
-        res.status(500).json({ error: 'Failed to generate meeting URL' });
-    }
-});
-
-
-    const nextQuestion = questions[currentQuestionNumber];
     res.json({
       question: nextQuestion,
-      questionNumber: currentQuestionNumber + 1,
-      totalQuestions: questions.length,
+      questionNumber: currentQuestionId + 1,
+      totalQuestions: interviewData.questions.length,
       isComplete: false
     });
   } catch (error) {
     console.error('Error fetching next question:', error);
-    res.status(500).json({ error: 'Failed to fetch next question' });
+    res.status(500).json({ 
+      error: 'Failed to fetch next question',
+      details: error.message 
+    });
   }
 });
 
-export{router};
+export { router };
