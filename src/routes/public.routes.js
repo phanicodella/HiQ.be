@@ -10,7 +10,7 @@ import { rekognition } from '../config/aws.js';
 
 const router = express.Router();
 
-// Multer configuration
+// Keep your existing multer configuration
 const upload = multer({ 
   storage: multer.memoryStorage(),
   limits: {
@@ -18,7 +18,7 @@ const upload = multer({
   }
 });
 
-// API Keys and Configuration
+// Keep your existing API Keys configuration
 const DAILY_API_KEY = process.env.DAILY_API_KEY;
 const ASSEMBLY_API_KEY = process.env.ASSEMBLY_API_KEY;
 
@@ -229,7 +229,6 @@ router.get('/interviews/:sessionId/meeting-url', async (req, res) => {
     });
   }
 });
-
 /**
  * Get/Generate Interview Questions
  */
@@ -258,10 +257,10 @@ router.get('/interviews/:sessionId/questions', async (req, res) => {
       });
     }
 
-    const questions = await openAIService.generateQuestions(
-      interviewData.type || 'technical',
-      interviewData.level || 'mid'
-    );
+    // Generate behavioral questions using the new service
+    const questions = await openAIService.generateBehavioralQuestions({
+      numberOfQuestions: 8
+    });
 
     await interviewDoc.ref.update({
       questions,
@@ -303,16 +302,25 @@ router.post('/interviews/:sessionId/start', async (req, res) => {
     const interviewRef = interviews.docs[0].ref;
     const interviewData = interviews.docs[0].data();
 
+    // Generate behavioral questions if not already present
     if (!interviewData.questions?.length) {
-      return res.status(400).json({ 
-        error: 'Interview questions not yet generated' 
+      const questions = await openAIService.generateBehavioralQuestions({
+        numberOfQuestions: 8
       });
+
+      await interviewRef.update({
+        questions,
+        questionsGeneratedAt: new Date()
+      });
+
+      interviewData.questions = questions;
     }
 
     await interviewRef.update({
       status: 'in_progress',
       startedAt: new Date(),
-      currentQuestionId: 1
+      currentQuestionId: 1,
+      answers: []  // Initialize empty answers array
     });
 
     res.json({ 
@@ -348,11 +356,31 @@ router.post('/interviews/:sessionId/answer',
         .get();
 
       if (!interviews.empty) {
+        // Get interview data to find the current question
+        const interviewData = interviews.docs[0].data();
+        const currentQuestion = interviewData.questions?.find(
+          q => q.id === parseInt(questionId)
+        );
+
+        // If we have transcript and current question, analyze the response
+        let analysis = null;
+        if (transcript && currentQuestion) {
+          try {
+            analysis = await openAIService.analyzeResponse(
+              currentQuestion.text,
+              transcript
+            );
+          } catch (err) {
+            console.error('Response analysis error:', err);
+          }
+        }
+
         const answer = {
           questionId: parseInt(questionId),
           transcript,
           timestamp: new Date(),
-          behaviorAnalysis: behaviorAnalysis ? JSON.parse(behaviorAnalysis) : null
+          behaviorAnalysis: behaviorAnalysis ? JSON.parse(behaviorAnalysis) : null,
+          analysis // Add AI analysis if available
         };
 
         await interviews.docs[0].ref.update({
@@ -361,7 +389,10 @@ router.post('/interviews/:sessionId/answer',
         });
       }
 
-      res.json({ success: true });
+      res.json({ 
+        success: true,
+        analysis: analysis || null
+      });
     } catch (error) {
       console.error('Error processing answer:', error);
       res.status(500).json({ 
@@ -425,4 +456,5 @@ router.get('/interviews/:sessionId/next-question', async (req, res) => {
   }
 });
 
+// Export the router
 export { router };

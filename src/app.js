@@ -106,7 +106,7 @@ app.get('/readiness', async (req, res) => {
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/interviews', interviewRoutes);
-app.use('/api/public', publicRoutes);
+app.use('/api', publicRoutes);
 
 // 404 handler
 app.use((req, res) => {
