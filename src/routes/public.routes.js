@@ -201,6 +201,31 @@ router.get('/interviews/:sessionId/questions', async (req, res) => {
     });
   }
  });
+
+ 
+router.post('/transcription-token', async (req, res) => {
+  try {
+    const response = await axios.post(
+      'https://api.assemblyai.com/v2/realtime/token',
+      { expires_in: 3600 },
+      {
+        headers: {
+          'Authorization': process.env.ASSEMBLY_AI_API_KEY,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    
+    console.log('Got AssemblyAI token:', response.data);
+    res.json({ token: response.data.token });
+  } catch (error) {
+    console.error('Error getting transcription token:', error);
+    res.status(500).json({ 
+      error: 'Failed to get transcription token',
+      details: error.message 
+    });
+  }
+});
 /**
  * Start Interview
  */
