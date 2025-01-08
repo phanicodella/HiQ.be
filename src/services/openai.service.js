@@ -8,139 +8,65 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// Behavioral question categories
-const QUESTION_CATEGORIES = {
-  leadership: {
-    focus: 'Leadership experience and team management',
-    weight: 0.2
-  },
-  problemSolving: {
-    focus: 'Problem-solving abilities and decision making',
-    weight: 0.2
-  },
-  communication: {
-    focus: 'Communication skills and team collaboration',
-    weight: 0.2
-  },
-  achievement: {
-    focus: 'Past achievements and project success stories',
-    weight: 0.15
-  },
-  challenges: {
-    focus: 'Handling challenges and difficult situations',
-    weight: 0.15
-  },
-  growth: {
-    focus: 'Learning, adaptability, and career growth',
-    weight: 0.1
-  }
-};
-
 /**
  * Generate behavioral interview questions
  * @param {Object} params - Question generation parameters
+ * @param {string} params.level - Candidate level (e.g., junior, senior, expert)
+ * @param {string} params.type - Interview type (e.g., behavioral, technical)
+ * @param {number} params.numberOfQuestions - Number of questions to generate
  * @returns {Promise<Array>} Array of generated questions
  */
-async function generateBehavioralQuestions({ numberOfQuestions = 8 } = {}) {
+async function generateBehavioralQuestions({ type = 'behavioral', level = 'mid', numberOfQuestions = 8 } = {}) {
+  console.log('OpenAI Service - Starting question generation with:', { type, level, numberOfQuestions });
+  console.log('OpenAI API Key length:', process.env.OPENAI_API_KEY?.length || 0);
   try {
-    const prompt = `Generate ${numberOfQuestions} unique behavioral interview questions. 
-
-Requirements:
-1. Questions should cover these categories with their approximate weights:
-${Object.entries(QUESTION_CATEGORIES)
-  .map(([category, { focus, weight }]) => 
-    `- ${category} (${weight * 100}%): ${focus}`)
-  .join('\n')}
-
-2. Each question should:
-   - Be open-ended
-   - Encourage detailed responses
-   - Focus on past experiences
-   - Not be leading or biased
-
-3. Format each question as a JSON object:
-{
-  "id": number,
-  "text": "question text",
-  "category": "category name",
-  "expectedDuration": "time in minutes",
-  "evaluationCriteria": ["criterion1", "criterion2", "criterion3"],
-  "followUp": ["potential follow-up question 1", "potential follow-up question 2"]
-}
-
-Return the questions as a JSON array.`;
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error('OpenAI API key is missing');
+    }
+    const prompt = `Generate ${numberOfQuestions} unique interview questions...; - Type: ${type} interview
+    - Level: ${level} level candidate
+    - Format: Questions should be open-ended and encourage detailed responses
+    
+    Return the questions as a JSON array with this format:
+    [
+      {
+        "id": 1,
+        "text": "question text",
+        "category": "question category",
+        "hint": "helpful hint for answering"
+      }
+    ]`;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4-turbo-preview",
+      model: "gpt-3.5-turbo",
       messages: [
         {
           role: "system",
-          content: "You are an expert HR interviewer specializing in behavioral interviews."
+          content: "You are an expert HR interviewer specializing in generating interview questions."
         },
         {
           role: "user",
           content: prompt
         }
       ],
-      response_format: { type: "json_object" },
-      temperature: 0.7
+      temperature: 0.7,
+      response_format: { type: "json_object" }
     });
 
     const parsedResponse = JSON.parse(response.choices[0].message.content);
-    
-    // Basic validation of the response format
-    if (!Array.isArray(parsedResponse.questions)) {
+
+    if (!Array.isArray(parsedResponse)) {
       throw new Error('Invalid response format from OpenAI');
     }
 
-    return parsedResponse.questions;
+    return parsedResponse;
   } catch (error) {
-    console.error('Question generation error:', error);
-    
-    // Return backup questions in case of API failure
-    return getBackupQuestions(numberOfQuestions);
+    console.error('OpenAI question generation error:', error);
+    console.log('Falling back to HuggingFace service...');
+    const { huggingFaceService } = await import('./huggingface.service.js');
+    return huggingFaceService.generateBehavioralQuestions({ type, level, numberOfQuestions });
+
   }
-}
-
-/**
- * Get backup questions in case of API failure
- */
-function getBackupQuestions(count = 8) {
-  const backupQuestions = [
-    {
-      id: 1,
-      text: "Tell me about a challenging situation at work and how you handled it.",
-      category: "challenges",
-      expectedDuration: 3,
-      evaluationCriteria: [
-        "Problem-solving ability",
-        "Decision-making process",
-        "Learning from experience"
-      ],
-      followUp: [
-        "What would you do differently now?",
-        "How did this experience change your approach to similar situations?"
-      ]
-    },
-    {
-      id: 2,
-      text: "Describe a project where you had to lead a team. What was your approach and what were the results?",
-      category: "leadership",
-      expectedDuration: 4,
-      evaluationCriteria: [
-        "Leadership style",
-        "Team management",
-        "Project outcome"
-      ],
-      followUp: [
-        "How did you handle any conflicts within the team?",
-        "What was your biggest learning from this experience?"
-      ]
-    }
-    // Add more backup questions as needed
-  ];
-
-  return backupQuestions.slice(0, count);
 }
 
 /**
@@ -179,11 +105,9 @@ Provide a JSON response with:
   "behavioral_indicators": ["indicator1", "indicator2"],
   "follow_up_recommended": boolean,
   "follow_up_questions": ["question1", "question2"]
-}
-`
+}`
         }
       ],
-      response_format: { type: "json_object" },
       temperature: 0.5
     });
 
@@ -198,5 +122,3 @@ export const openAIService = {
   generateBehavioralQuestions,
   analyzeResponse
 };
-
-//empty commit 

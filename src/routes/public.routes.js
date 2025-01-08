@@ -8,6 +8,7 @@ import { db, admin } from '../config/firebase.js';
 import { openAIService } from '../services/openai.service.js';
 import { rekognition } from '../config/aws.js';
 
+
 const router = express.Router();
 
 // Keep your existing multer configuration
@@ -84,13 +85,21 @@ router.post('/speech-analysis', upload.single('audio'), async (req, res) => {
 /**
  * Fraud Detection Analysis
  */
-router.post('/fraud-detection', upload.single('frame'), async (req, res) => {
+router.post('api/fraud-detection', upload.single('frame'), async (req, res) => {
   try {
     const { sessionId, timestamp } = req.body;
     const frameBlob = req.file;
 
-    if (!frameBlob) {
-      return res.status(400).json({ error: 'Video frame required' });
+    // Validate required parameters
+    if (!sessionId || !timestamp || !frameBlob) {
+      return res.status(400).json({ 
+        error: 'Missing required parameters',
+        details: {
+          sessionId: !!sessionId,
+          timestamp: !!timestamp,
+          frameBlob: !!frameBlob
+        }
+      });
     }
 
     const detectFacesResponse = await rekognition.detectFaces({
@@ -120,26 +129,7 @@ router.post('/fraud-detection', upload.single('frame'), async (req, res) => {
       analysis.metrics.warnings.push('No face detected');
     }
 
-    const interviews = await db.collection('interviews')
-      .where('sessionId', '==', sessionId)
-      .limit(1)
-      .get();
-
-    if (!interviews.empty) {
-      await interviews.docs[0].ref.update({
-        fraudDetection: admin.firestore.FieldValue.arrayUnion(analysis)
-      });
-
-      if (!analysis.metrics.isValidFrame) {
-        await interviews.docs[0].ref.update({
-          fraudDetected: true,
-          fraudWarnings: admin.firestore.FieldValue.arrayUnion(...analysis.metrics.warnings)
-        });
-      }
-    }
-
     res.json({ success: true, analysis });
-
   } catch (error) {
     console.error('Fraud detection error:', error);
     res.status(500).json({
@@ -258,9 +248,13 @@ router.get('/interviews/:sessionId/questions', async (req, res) => {
     }
 
     // Generate behavioral questions using the new service
-    const questions = await openAIService.generateBehavioralQuestions({
-      numberOfQuestions: 8
-    });
+    const { huggingFaceService } = await import('../services/huggingface.service.js');
+const { type = 'behavioral', level = 'mid' } = interviewData;
+const questions = await huggingFaceService.generateBehavioralQuestions({
+  type,
+  level,
+  numberOfQuestions: 8
+});
 
     await interviewDoc.ref.update({
       questions,
@@ -289,51 +283,51 @@ router.post('/interviews/:sessionId/start', async (req, res) => {
     
     const interviews = await db.collection('interviews')
       .where('sessionId', '==', sessionId)
-      .where('status', '==', 'scheduled')
       .limit(1)
       .get();
 
     if (interviews.empty) {
-      return res.status(404).json({ 
-        error: 'Interview not found or already in progress' 
-      });
+      return res.status(404).json({ error: 'Interview not found' });
     }
 
     const interviewRef = interviews.docs[0].ref;
     const interviewData = interviews.docs[0].data();
-
-    // Generate behavioral questions if not already present
-    if (!interviewData.questions?.length) {
-      const questions = await openAIService.generateBehavioralQuestions({
-        numberOfQuestions: 8
+    if (interviewData.status !== 'scheduled') {
+      return res.status(400).json({ 
+        error: 'Interview cannot be started', 
+        details: `Current status: ${interviewData.status}` 
       });
+    }
 
+    // Ensure questions exist
+    if (!interviewData.questions?.length) {
+      const { type = 'behavioral', level = 'mid' } = interviewData;
+const questions = await openAIService.generateBehavioralQuestions({
+  type,
+  level,
+  numberOfQuestions: 8
+});
+      
       await interviewRef.update({
         questions,
         questionsGeneratedAt: new Date()
       });
-
+      
       interviewData.questions = questions;
     }
 
     await interviewRef.update({
       status: 'in_progress',
-      startedAt: new Date(),
-      currentQuestionId: 1,
-      answers: []  // Initialize empty answers array
+      startedAt: new Date()
     });
 
     res.json({ 
       question: interviewData.questions[0],
-      questionNumber: 1,
       totalQuestions: interviewData.questions.length 
     });
   } catch (error) {
-    console.error('Error starting interview:', error);
-    res.status(500).json({ 
-      error: 'Failed to start interview',
-      details: error.message 
-    });
+    console.error('Start interview error:', error);
+    res.status(500).json({ error: 'Failed to start interview' });
   }
 });
 
@@ -355,44 +349,41 @@ router.post('/interviews/:sessionId/answer',
         .limit(1)
         .get();
 
-      if (!interviews.empty) {
-        // Get interview data to find the current question
-        const interviewData = interviews.docs[0].data();
-        const currentQuestion = interviewData.questions?.find(
-          q => q.id === parseInt(questionId)
-        );
-
-        // If we have transcript and current question, analyze the response
-        let analysis = null;
-        if (transcript && currentQuestion) {
-          try {
-            analysis = await openAIService.analyzeResponse(
-              currentQuestion.text,
-              transcript
-            );
-          } catch (err) {
-            console.error('Response analysis error:', err);
+        if (!interviews.empty) {
+          let analysis = null;
+          const interviewData = interviews.docs[0].data();
+          const currentQuestion = interviewData.questions?.find(
+            q => q.id === parseInt(questionId)
+          );
+        
+          if (transcript && currentQuestion) {
+            try {
+              analysis = await openAIService.analyzeResponse(
+                currentQuestion.text,
+                transcript
+              );
+            } catch (err) {
+              console.error('Response analysis error:', err);
+              // Set default analysis if OpenAI fails
+              analysis = {
+                analysis: "Failed to analyze response",
+                timestamp: new Date()
+              };
+            }
           }
-        }
-
-        const answer = {
-          questionId: parseInt(questionId),
-          transcript,
-          timestamp: new Date(),
-          behaviorAnalysis: behaviorAnalysis ? JSON.parse(behaviorAnalysis) : null,
-          analysis // Add AI analysis if available
-        };
-
-        await interviews.docs[0].ref.update({
-          answers: admin.firestore.FieldValue.arrayUnion(answer),
-          lastAnswerAt: new Date()
-        });
-      }
+        
+          const answer = {
+            questionId: parseInt(questionId),
+            transcript,
+            timestamp: new Date(),
+            behaviorAnalysis: behaviorAnalysis ? JSON.parse(behaviorAnalysis) : null,
+            analysis
+          };
 
       res.json({ 
         success: true,
         analysis: analysis || null
-      });
+      });}
     } catch (error) {
       console.error('Error processing answer:', error);
       res.status(500).json({ 
