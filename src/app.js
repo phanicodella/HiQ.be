@@ -1,7 +1,4 @@
-/* 
- * backend/src/app.js
- * Main application entry point
- */
+// backend/src/app.js
 
 import express from 'express';
 import cors from 'cors';
@@ -11,75 +8,69 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 import authRoutes from './routes/auth.routes.js';
 import interviewRoutes from './routes/interview.routes.js';
-import {router as publicRoutes} from './routes/public.routes.js';
+import { router as publicRoutes } from './routes/public.routes.js';
+import compression from 'compression';
 
-/* 
- * Load environment variables
- */
+// Load environment variables
 dotenv.config();
-
+process.env.NODE_ENV = 'development';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/* 
- * Security middleware
- */
+// Security middleware
 app.use(helmet());
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3001',
   credentials: true
 }));
 
-/* 
- * Rate limiting
- */
+// Compression
+app.use(compression());
+
+// Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000, 
+  max: 2000, // Increased for video processing
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+  skip: (req) => {
+    // Skip rate limiting for streaming endpoints
+    return req.path.includes('/fraud-detection') || 
+           req.path.includes('/answer') ||
+           req.path.includes('/speech-analysis');
+  }
 });
+
 app.use('/api/', limiter);
 
-/* 
- * Request parsing
- */
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Request parsing - increased limits for file uploads
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-/* 
- * Logging
- */
+// Logging
 app.use(morgan('combined'));
 
-/* 
- * Health check endpoint
- */
+// Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
-/* 
- * API Routes
- */
+// API Routes - ensure all are prefixed with /api
 app.use('/api/auth', authRoutes);
-app.use('/api/interviews', interviewRoutes);  
-app.use('/api/public', publicRoutes);  // New public routes
+app.use('/api/interviews', interviewRoutes);
+app.use('/api/public', publicRoutes);
 
-/* 
- * 404 handler
- */
+// 404 handler
 app.use((req, res) => {
+  console.log('404 Not Found:', req.method, req.url);
   res.status(404).json({ error: 'Not Found' });
 });
 
-/* 
- * Global error handler
- */
+// Global error handler
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('Global error handler:', err);
   
-  /* 
-   * Handle specific errors
-   */
   if (err.name === 'UnauthorizedError') {
     return res.status(401).json({ error: 'Invalid token' });
   }
@@ -88,9 +79,6 @@ app.use((err, req, res, next) => {
     return res.status(400).json({ error: err.message });
   }
   
-  /* 
-   * Default error
-   */
   res.status(500).json({ 
     error: process.env.NODE_ENV === 'production' 
       ? 'Internal Server Error' 
@@ -98,11 +86,18 @@ app.use((err, req, res, next) => {
   });
 });
 
-/* 
- * Start server
- */
-app.listen(PORT, () => {
-  console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
-});
+// Start server with error handling
+const startServer = () => {
+  try {
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode`);
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+startServer();
 
 export default app;

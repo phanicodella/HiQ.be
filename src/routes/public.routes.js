@@ -3,15 +3,11 @@
 import express from 'express';
 import multer from 'multer';
 import axios from 'axios';
-import { getStorage } from 'firebase-admin/storage';
 import { db, admin } from '../config/firebase.js';
-import { openAIService } from '../services/openai.service.js';
-import { rekognition } from '../config/aws.js';
-
-
+const { cohereService } = await import('../services/cohere.service.js');
 const router = express.Router();
 
-// Keep your existing multer configuration
+// Multer configuration for file uploads
 const upload = multer({ 
   storage: multer.memoryStorage(),
   limits: {
@@ -19,7 +15,7 @@ const upload = multer({
   }
 });
 
-// Keep your existing API Keys configuration
+// API Keys configuration
 const DAILY_API_KEY = process.env.DAILY_API_KEY;
 const ASSEMBLY_API_KEY = process.env.ASSEMBLY_API_KEY;
 
@@ -83,125 +79,6 @@ router.post('/speech-analysis', upload.single('audio'), async (req, res) => {
 });
 
 /**
- * Fraud Detection Analysis
- */
-/**
- * Fraud Detection Analysis
- */
-router.post('/fraud-detection', upload.single('frame'), async (req, res) => {
-  try {
-    const { sessionId, timestamp } = req.body;
-    const frameBlob = req.file;
-
-    // Validate required parameters
-    if (!sessionId || !timestamp || !frameBlob) {
-      return res.status(400).json({ 
-        error: 'Missing required parameters',
-        details: {
-          sessionId: !!sessionId,
-          timestamp: !!timestamp,
-          frameBlob: !!frameBlob
-        }
-      });
-    }
-
-    // Verify interview exists and is active
-    const interviews = await db.collection('interviews')
-      .where('sessionId', '==', sessionId)
-      .where('status', '==', 'in_progress')
-      .limit(1)
-      .get();
-
-    if (interviews.empty) {
-      return res.status(404).json({
-        error: 'Active interview session not found',
-        details: 'Invalid session or interview not in progress'
-      });
-    }
-
-    const detectFacesResponse = await rekognition.detectFaces({
-      Image: {
-        Bytes: frameBlob.buffer
-      },
-      Attributes: ['ALL']
-    });
-
-    const analysis = {
-      timestamp: new Date(parseInt(timestamp)),
-      sessionId,
-      metrics: {
-        facesDetected: detectFacesResponse.FaceDetails.length,
-        isValidFrame: true,
-        confidence: detectFacesResponse.FaceDetails[0]?.Confidence || 0,
-        warnings: []
-      }
-    };
-
-    // Validate face detection results
-    if (detectFacesResponse.FaceDetails.length > 1) {
-      analysis.metrics.isValidFrame = false;
-      analysis.metrics.warnings.push('Multiple faces detected');
-    }
-
-    if (detectFacesResponse.FaceDetails.length === 0) {
-      analysis.metrics.isValidFrame = false;
-      analysis.metrics.warnings.push('No face detected');
-    }
-
-    // Additional checks if face is detected
-    if (detectFacesResponse.FaceDetails.length === 1) {
-      const face = detectFacesResponse.FaceDetails[0];
-      
-      // Check if person is looking at camera
-      if (face.Pose.Pitch < -20 || face.Pose.Pitch > 20 || 
-          face.Pose.Yaw < -20 || face.Pose.Yaw > 20) {
-        analysis.metrics.warnings.push('Face not properly aligned with camera');
-      }
-
-      // Check for eye visibility
-      if (face.EyesOpen?.Value === false) {
-        analysis.metrics.warnings.push('Eyes not fully visible');
-      }
-
-      // Add confidence scores
-      analysis.metrics.faceConfidence = face.Confidence;
-      analysis.metrics.eyeOpenConfidence = face.EyesOpen?.Confidence;
-    }
-
-    // Store analysis in Firestore
-    const interviewRef = interviews.docs[0].ref;
-    await interviewRef.update({
-      fraudDetection: admin.firestore.FieldValue.arrayUnion(analysis),
-      lastFraudCheck: new Date()
-    });
-
-    res.json({ 
-      success: true, 
-      analysis,
-      message: analysis.metrics.warnings.length > 0 
-        ? 'Face detection completed with warnings' 
-        : 'Face detection completed successfully'
-    });
-
-  } catch (error) {
-    console.error('Fraud detection error:', error);
-    
-    // Handle specific AWS errors
-    if (error.code === 'InvalidImageFormatException') {
-      return res.status(400).json({
-        error: 'Invalid image format',
-        details: 'Please ensure the image is in a supported format (JPG/PNG)'
-      });
-    }
-
-    res.status(500).json({
-      error: 'Fraud detection failed',
-      details: error.message
-    });
-  }
-});
-
-/**
  * AssemblyAI Transcription Token
  */
 router.post('/transcription-token', async (req, res) => {
@@ -219,10 +96,10 @@ router.post('/transcription-token', async (req, res) => {
     
     res.json({ token: response.data.token });
   } catch (error) {
-    console.error('Error getting transcription token:', error.response?.data || error);
+    console.error('Error getting transcription token:', error);
     res.status(500).json({ 
       error: 'Failed to get transcription token',
-      details: error.response?.data || error.message 
+      details: error.message 
     });
   }
 });
@@ -241,7 +118,7 @@ router.get('/interviews/:sessionId/meeting-url', async (req, res) => {
         properties: {
           enable_screenshare: true,
           enable_recording: 'cloud',
-          exp: Math.floor(Date.now() / 1000) + 3600, // Expire in 1 hour
+          exp: Math.floor(Date.now() / 1000) + 3600,
           max_participants: 2,
           enable_chat: false
         }
@@ -259,7 +136,6 @@ router.get('/interviews/:sessionId/meeting-url', async (req, res) => {
       throw new Error('Meeting URL missing in Daily.co API response');
     }
 
-    // Store meeting URL in interview document
     const interviews = await db.collection('interviews')
       .where('sessionId', '==', sessionId)
       .limit(1)
@@ -274,68 +150,57 @@ router.get('/interviews/:sessionId/meeting-url', async (req, res) => {
 
     res.json({ url: meetingUrl });
   } catch (error) {
-    console.error('Failed to generate meeting URL:', error.response?.data || error.message);
+    console.error('Failed to generate meeting URL:', error);
     res.status(500).json({
       error: 'Failed to generate meeting URL',
-      details: error.response?.data || error.message
+      details: error.message
     });
   }
 });
+
 /**
  * Get/Generate Interview Questions
  */
 router.get('/interviews/:sessionId/questions', async (req, res) => {
   try {
     const { sessionId } = req.params;
-
     const interviews = await db.collection('interviews')
       .where('sessionId', '==', sessionId)
       .limit(1)
       .get();
-
+ 
     if (interviews.empty) {
-      return res.status(404).json({ 
-        error: 'Interview not found' 
-      });
+      return res.status(404).json({ error: 'Interview not found' });
     }
-
-    const interviewDoc = interviews.docs[0];
-    const interviewData = interviewDoc.data();
-    
-    if (interviewData.questions?.length > 0) {
-      return res.json({ 
-        questions: interviewData.questions,
-        cached: true 
-      });
-    }
-
-    // Generate behavioral questions using the new service
-    const { huggingFaceService } = await import('../services/huggingface.service.js');
-const { type = 'behavioral', level = 'mid' } = interviewData;
-const questions = await huggingFaceService.generateBehavioralQuestions({
-  type,
-  level,
-  numberOfQuestions: 8
-});
-
-    await interviewDoc.ref.update({
+ 
+    const interviewData = interviews.docs[0].data();
+    const { type = 'behavioral', level = 'mid' } = interviewData;
+ 
+    const { cohereService } = await import('../services/cohere.service.js');
+    const questions = await cohereService.generateInterviewQuestions({
+      type,
+      level,
+      numberOfQuestions: 8 
+    });
+ 
+    await interviews.docs[0].ref.update({
       questions,
       questionsGeneratedAt: new Date()
     });
-
+ 
     res.json({ 
       questions,
-      cached: false 
+      type,
+      level
     });
+    
   } catch (error) {
     console.error('Question generation error:', error);
     res.status(500).json({ 
-      error: 'Failed to generate questions',
-      details: error.message 
+      error: error.message || 'Failed to generate questions'
     });
   }
-});
-
+ });
 /**
  * Start Interview
  */
@@ -354,6 +219,7 @@ router.post('/interviews/:sessionId/start', async (req, res) => {
 
     const interviewRef = interviews.docs[0].ref;
     const interviewData = interviews.docs[0].data();
+
     if (interviewData.status !== 'scheduled') {
       return res.status(400).json({ 
         error: 'Interview cannot be started', 
@@ -364,11 +230,12 @@ router.post('/interviews/:sessionId/start', async (req, res) => {
     // Ensure questions exist
     if (!interviewData.questions?.length) {
       const { type = 'behavioral', level = 'mid' } = interviewData;
-const questions = await openAIService.generateBehavioralQuestions({
-  type,
-  level,
-  numberOfQuestions: 8
-});
+      const { huggingFaceService } = await import('../services/huggingface.service.js');
+      const questions = await huggingFaceService.generateInterviewQuestions({
+        type,
+        level,
+        numberOfQuestions: 8
+      });
       
       await interviewRef.update({
         questions,
@@ -397,55 +264,40 @@ const questions = await openAIService.generateBehavioralQuestions({
  * Submit Answer
  */
 router.post('/interviews/:sessionId/answer', 
-  upload.fields([
-    { name: 'audio', maxCount: 1 },
-    { name: 'video', maxCount: 1 }
-  ]), 
+  upload.single('audio'), 
   async (req, res) => {
     try {
       const { sessionId } = req.params;
-      const { transcript, questionId, behaviorAnalysis } = req.body;
+      const { transcript, questionId } = req.body;
+
+      // Don't require audio, just transcript
+      if (!transcript) {
+        return res.status(200).json({ success: true });
+      }
 
       const interviews = await db.collection('interviews')
         .where('sessionId', '==', sessionId)
         .limit(1)
         .get();
 
-        if (!interviews.empty) {
-          let analysis = null;
-          const interviewData = interviews.docs[0].data();
-          const currentQuestion = interviewData.questions?.find(
-            q => q.id === parseInt(questionId)
-          );
-        
-          if (transcript && currentQuestion) {
-            try {
-              analysis = await openAIService.analyzeResponse(
-                currentQuestion.text,
-                transcript
-              );
-            } catch (err) {
-              console.error('Response analysis error:', err);
-              // Set default analysis if OpenAI fails
-              analysis = {
-                analysis: "Failed to analyze response",
-                timestamp: new Date()
-              };
-            }
-          }
-        
-          const answer = {
-            questionId: parseInt(questionId),
-            transcript,
-            timestamp: new Date(),
-            behaviorAnalysis: behaviorAnalysis ? JSON.parse(behaviorAnalysis) : null,
-            analysis
-          };
+      if (!interviews.empty) {
+        const interview = interviews.docs[0];
+        const answer = {
+          questionId: parseInt(questionId),
+          transcript,
+          timestamp: new Date(),
+          audioUrl: req.file ? await storeAudio(req.file, sessionId, questionId) : null
+        };
 
-      res.json({ 
-        success: true,
-        analysis: analysis || null
-      });}
+        // Store the answer
+        await interview.ref.update({
+          answers: admin.firestore.FieldValue.arrayUnion(answer)
+        });
+
+        res.json({ success: true });
+      } else {
+        res.status(404).json({ error: 'Interview not found' });
+      }
     } catch (error) {
       console.error('Error processing answer:', error);
       res.status(500).json({ 
@@ -469,14 +321,13 @@ router.get('/interviews/:sessionId/next-question', async (req, res) => {
       .get();
 
     if (interviews.empty) {
-      return res.status(404).json({ 
-        error: 'Interview not found' 
-      });
+      return res.status(404).json({ error: 'Interview not found' });
     }
 
     const interviewData = interviews.docs[0].data();
+    const { questions = [] } = interviewData;
     
-    if (currentQuestionId >= interviewData.questions.length) {
+    if (currentQuestionId >= questions.length) {
       await interviews.docs[0].ref.update({
         status: 'completed',
         completedAt: new Date()
@@ -488,7 +339,17 @@ router.get('/interviews/:sessionId/next-question', async (req, res) => {
       });
     }
 
-    const nextQuestion = interviewData.questions[currentQuestionId];
+    const nextQuestion = questions[currentQuestionId];
+
+    // Validate question type matches interview type
+    if (nextQuestion.type !== interviewData.type) {
+      console.error('Question type mismatch:', {
+        expected: interviewData.type,
+        got: nextQuestion.type
+      });
+      return res.status(500).json({ error: 'Invalid question type' });
+    }
+
     await interviews.docs[0].ref.update({
       currentQuestionId: currentQuestionId + 1,
       lastQuestionAt: new Date()
@@ -497,7 +358,7 @@ router.get('/interviews/:sessionId/next-question', async (req, res) => {
     res.json({
       question: nextQuestion,
       questionNumber: currentQuestionId + 1,
-      totalQuestions: interviewData.questions.length,
+      totalQuestions: questions.length,
       isComplete: false
     });
   } catch (error) {
@@ -509,5 +370,13 @@ router.get('/interviews/:sessionId/next-question', async (req, res) => {
   }
 });
 
-// Export the router
+// Error handling middleware
+router.use((err, req, res, next) => {
+  console.error('Route error:', err);
+  res.status(500).json({
+    error: 'Internal server error',
+    details: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+});
+
 export { router };
