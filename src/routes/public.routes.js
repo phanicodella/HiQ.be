@@ -85,7 +85,10 @@ router.post('/speech-analysis', upload.single('audio'), async (req, res) => {
 /**
  * Fraud Detection Analysis
  */
-router.post('api/fraud-detection', upload.single('frame'), async (req, res) => {
+/**
+ * Fraud Detection Analysis
+ */
+router.post('/fraud-detection', upload.single('frame'), async (req, res) => {
   try {
     const { sessionId, timestamp } = req.body;
     const frameBlob = req.file;
@@ -102,15 +105,30 @@ router.post('api/fraud-detection', upload.single('frame'), async (req, res) => {
       });
     }
 
+    // Verify interview exists and is active
+    const interviews = await db.collection('interviews')
+      .where('sessionId', '==', sessionId)
+      .where('status', '==', 'in_progress')
+      .limit(1)
+      .get();
+
+    if (interviews.empty) {
+      return res.status(404).json({
+        error: 'Active interview session not found',
+        details: 'Invalid session or interview not in progress'
+      });
+    }
+
     const detectFacesResponse = await rekognition.detectFaces({
       Image: {
         Bytes: frameBlob.buffer
       },
       Attributes: ['ALL']
-    }).promise();
+    });
 
     const analysis = {
-      timestamp: new Date(timestamp),
+      timestamp: new Date(parseInt(timestamp)),
+      sessionId,
       metrics: {
         facesDetected: detectFacesResponse.FaceDetails.length,
         isValidFrame: true,
@@ -119,6 +137,7 @@ router.post('api/fraud-detection', upload.single('frame'), async (req, res) => {
       }
     };
 
+    // Validate face detection results
     if (detectFacesResponse.FaceDetails.length > 1) {
       analysis.metrics.isValidFrame = false;
       analysis.metrics.warnings.push('Multiple faces detected');
@@ -129,9 +148,52 @@ router.post('api/fraud-detection', upload.single('frame'), async (req, res) => {
       analysis.metrics.warnings.push('No face detected');
     }
 
-    res.json({ success: true, analysis });
+    // Additional checks if face is detected
+    if (detectFacesResponse.FaceDetails.length === 1) {
+      const face = detectFacesResponse.FaceDetails[0];
+      
+      // Check if person is looking at camera
+      if (face.Pose.Pitch < -20 || face.Pose.Pitch > 20 || 
+          face.Pose.Yaw < -20 || face.Pose.Yaw > 20) {
+        analysis.metrics.warnings.push('Face not properly aligned with camera');
+      }
+
+      // Check for eye visibility
+      if (face.EyesOpen?.Value === false) {
+        analysis.metrics.warnings.push('Eyes not fully visible');
+      }
+
+      // Add confidence scores
+      analysis.metrics.faceConfidence = face.Confidence;
+      analysis.metrics.eyeOpenConfidence = face.EyesOpen?.Confidence;
+    }
+
+    // Store analysis in Firestore
+    const interviewRef = interviews.docs[0].ref;
+    await interviewRef.update({
+      fraudDetection: admin.firestore.FieldValue.arrayUnion(analysis),
+      lastFraudCheck: new Date()
+    });
+
+    res.json({ 
+      success: true, 
+      analysis,
+      message: analysis.metrics.warnings.length > 0 
+        ? 'Face detection completed with warnings' 
+        : 'Face detection completed successfully'
+    });
+
   } catch (error) {
     console.error('Fraud detection error:', error);
+    
+    // Handle specific AWS errors
+    if (error.code === 'InvalidImageFormatException') {
+      return res.status(400).json({
+        error: 'Invalid image format',
+        details: 'Please ensure the image is in a supported format (JPG/PNG)'
+      });
+    }
+
     res.status(500).json({
       error: 'Fraud detection failed',
       details: error.message

@@ -16,7 +16,7 @@ const openai = new OpenAI({
  * @param {number} params.numberOfQuestions - Number of questions to generate
  * @returns {Promise<Array>} Array of generated questions
  */
-async function generateBehavioralQuestions({ type = 'behavioral', level = 'mid', numberOfQuestions = 8 } = {}) {
+async function generateInterviewQuestions({ type = 'behavioral', level = 'mid', numberOfQuestions = 8 } = {}) {
   console.log('OpenAI Service - Starting question generation with:', { type, level, numberOfQuestions });
   console.log('OpenAI API Key length:', process.env.OPENAI_API_KEY?.length || 0);
   try {
@@ -64,7 +64,7 @@ async function generateBehavioralQuestions({ type = 'behavioral', level = 'mid',
     console.error('OpenAI question generation error:', error);
     console.log('Falling back to HuggingFace service...');
     const { huggingFaceService } = await import('./huggingface.service.js');
-    return huggingFaceService.generateBehavioralQuestions({ type, level, numberOfQuestions });
+    return huggingFaceService.generateInterviewQuestions({ type, level, numberOfQuestions });
 
   }
 }
@@ -119,6 +119,6 @@ Provide a JSON response with:
 }
 
 export const openAIService = {
-  generateBehavioralQuestions,
+  generateInterviewQuestions,
   analyzeResponse
 };

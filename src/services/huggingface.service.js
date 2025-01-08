@@ -13,8 +13,49 @@ console.log('HuggingFace Service - Initialized with token length:', process.env.
 async function generateBehavioralQuestions({ type = 'behavioral', level = 'mid', numberOfQuestions = 8 } = {}) {
     try {
         // Create the prompt
-        const prompt = `Generate ${numberOfQuestions} unique interview questions for a ${level} level ${type} interview. 
-        Questions should be challenging and relevant to assess candidate capabilities.`;
+        // Create level-specific criteria
+const levelCriteria = {
+    junior: "Focus on fundamental knowledge, enthusiasm for learning, and basic problem-solving abilities",
+    mid: "Evaluate practical experience, team collaboration, and intermediate technical skills",
+    senior: "Assess leadership abilities, system design experience, architectural decisions, and advanced problem-solving"
+};
+
+// Create type-specific focus areas
+const typeFocus = {
+    "system-design": {
+        junior: "basic component design, API architecture, and simple scalability concepts",
+        mid: "distributed systems, scalability patterns, and system integration",
+        senior: "large-scale distributed systems, complex architectural decisions, and enterprise-level solutions"
+    },
+    technical: {
+        junior: "basic programming concepts, data structures, simple algorithms",
+        mid: "system integration, code optimization, testing strategies",
+        senior: "architecture patterns, scalability, technical leadership"
+    },
+    behavioral: {
+        junior: "learning ability, teamwork, basic workplace scenarios",
+        mid: "project management, conflict resolution, mentoring",
+        senior: "leadership challenges, strategic thinking, organizational impact"
+    },
+    "system-design": {
+        junior: "basic component design, simple API design",
+        mid: "distributed systems, scalability considerations",
+        senior: "complex architectures, system trade-offs, large-scale design"
+    }
+};
+
+// Create the prompt with specific context
+const prompt = `Generate ${numberOfQuestions} unique interview questions for a ${level} level ${type} interview.
+Level context: ${levelCriteria[level]}
+Type focus: ${typeFocus[type][level]}
+
+Questions should be challenging and relevant to assess candidate capabilities in these areas.
+Format each question to start with a number and provide context for evaluation.
+
+Example format:
+1. [Technical Question] Explain how you would implement...
+2. [System Design Question] Design a system that...
+3. [Behavioral Question] Tell me about a time when...`;
 
         // Make the API call
         const response = await hf.textGeneration({
@@ -62,83 +103,4 @@ async function generateBehavioralQuestions({ type = 'behavioral', level = 'mid',
         console.error('Failed to generate questions:', error);
         console.log('Using fallback questions due to error');
         return getFallbackQuestions();
-    }
-}
-
-// Helper functions
-function getCategoryForQuestion(question) {
-    const questionLower = question.toLowerCase();
-    if (questionLower.includes('problem')) return 'Problem Solving';
-    if (questionLower.includes('team') || questionLower.includes('work')) return 'Teamwork';
-    if (questionLower.includes('challenge')) return 'Challenges';
-    if (questionLower.includes('design') || questionLower.includes('implement')) return 'Technical Design';
-    if (questionLower.includes('organize') || questionLower.includes('prioritize')) return 'Organization';
-    return 'General';
-}
-
-function getHintForQuestion(question) {
-    const questionLower = question.toLowerCase();
-    if (questionLower.includes('problem')) return 'Describe specific steps taken and outcome achieved';
-    if (questionLower.includes('team')) return 'Focus on collaboration and your specific role';
-    if (questionLower.includes('challenge')) return 'Use the STAR method to structure your response';
-    if (questionLower.includes('design')) return 'Explain your thought process and design decisions';
-    if (questionLower.includes('organize')) return 'Provide specific examples and tools used';
-    return 'Provide concrete examples from your experience';
-}
-
-function getFallbackQuestions() {
-    return [
-        {
-            id: 1,
-            text: "Tell me about a challenging project you've worked on.",
-            category: "Problem Solving",
-            hint: "Focus on your specific role and the outcome"
-        },
-        {
-            id: 2,
-            text: "How do you handle conflicts in a team setting?",
-            category: "Teamwork",
-            hint: "Use a specific example with resolution"
-        },
-        {
-            id: 3,
-            text: "Describe a situation where you had to meet a tight deadline.",
-            category: "Organization",
-            hint: "Explain your prioritization and time management"
-        },
-        {
-            id: 4,
-            text: "Tell me about a time you had to learn a new technology quickly.",
-            category: "Technical Design",
-            hint: "Focus on your learning approach and application"
-        },
-        {
-            id: 5,
-            text: "How do you handle feedback and criticism?",
-            category: "General",
-            hint: "Provide specific examples of receiving and implementing feedback"
-        },
-        {
-            id: 6,
-            text: "Describe a situation where you had to lead a team.",
-            category: "Teamwork",
-            hint: "Highlight your leadership style and results"
-        },
-        {
-            id: 7,
-            text: "Tell me about a time you had to deal with a difficult stakeholder.",
-            category: "Challenges",
-            hint: "Focus on communication and resolution strategies"
-        },
-        {
-            id: 8,
-            text: "How do you stay updated with industry trends?",
-            category: "General",
-            hint: "Share specific learning resources and methods"
-        }
-    ];
-}
-
-export const huggingFaceService = {
-    generateBehavioralQuestions
-};
+    }}
