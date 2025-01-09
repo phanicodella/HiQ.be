@@ -5,10 +5,22 @@ import multer from 'multer';
 import axios from 'axios';
 import { db, admin } from '../config/firebase.js';
 const { cohereService } = await import('../services/cohere.service.js');
+import { CohereClient } from 'cohere-ai';
 const router = express.Router();
+// At the top of backend/src/routes/public.routes.js with other imports
+const { answerAnalysisService } = await import('../services/answer.service.js');
+
+import OpenAI from 'openai';
+
+// Initialize OpenAI
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+
 
 // Multer configuration for file uploads
-const upload = multer({ 
+const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 10 * 1024 * 1024 // 10MB limit
@@ -93,13 +105,13 @@ router.post('/transcription-token', async (req, res) => {
         }
       }
     );
-    
+
     res.json({ token: response.data.token });
   } catch (error) {
     console.error('Error getting transcription token:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to get transcription token',
-      details: error.message 
+      details: error.message
     });
   }
 });
@@ -168,41 +180,99 @@ router.get('/interviews/:sessionId/questions', async (req, res) => {
       .where('sessionId', '==', sessionId)
       .limit(1)
       .get();
- 
+
     if (interviews.empty) {
       return res.status(404).json({ error: 'Interview not found' });
     }
- 
+
     const interviewData = interviews.docs[0].data();
     const { type = 'behavioral', level = 'mid' } = interviewData;
- 
+
     const { cohereService } = await import('../services/cohere.service.js');
     const questions = await cohereService.generateInterviewQuestions({
       type,
       level,
-      numberOfQuestions: 8 
+      numberOfQuestions: 8
     });
- 
+
     await interviews.docs[0].ref.update({
       questions,
       questionsGeneratedAt: new Date()
     });
- 
-    res.json({ 
+
+    res.json({
       questions,
       type,
       level
     });
-    
+
   } catch (error) {
     console.error('Question generation error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: error.message || 'Failed to generate questions'
     });
   }
- });
+});
 
- 
+router.post('/interviews/:sessionId/analyze-answer', async (req, res) => {
+  try {
+    const { question, answer } = req.body;
+
+    if (!question || !answer) {
+      return res.status(400).json({ error: 'Question and answer are required' });
+    }
+
+    const analysis = await answerAnalysisService.analyzeAnswer(question, answer);
+    res.json({ analysis });
+
+  } catch (error) {
+    console.error('Answer analysis error:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to analyze answer'
+    });
+  }
+});
+router.post('/interviews/:sessionId/complete', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { questionHistory } = req.body;
+
+    const interviews = await db.collection('interviews')
+      .where('sessionId', '==', sessionId)
+      .limit(1)
+      .get();
+
+    if (interviews.empty) {
+      return res.status(404).json({ error: 'Interview not found' });
+    }
+
+    const interviewData = interviews.docs[0].data();
+    
+    console.log('Starting interview analysis for session:', sessionId);
+    
+    // Use the new analyzeInterview method
+    const analysis = await cohereService.analyzeInterview(questionHistory);
+
+    // Store analysis in Firestore
+    await interviews.docs[0].ref.update({
+      status: 'completed',
+      completedAt: new Date(),
+      analysis,
+      questionHistory
+    });
+
+    res.json({
+      success: true,
+      analysis
+    });
+
+  } catch (error) {
+    console.error('Interview completion error:', error);
+    res.status(500).json({ 
+      error: error.message || 'Failed to complete interview analysis'
+    });
+  }
+});
 router.post('/transcription-token', async (req, res) => {
   try {
     const response = await axios.post(
@@ -215,14 +285,14 @@ router.post('/transcription-token', async (req, res) => {
         }
       }
     );
-    
+
     console.log('Got AssemblyAI token:', response.data);
     res.json({ token: response.data.token });
   } catch (error) {
     console.error('Error getting transcription token:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to get transcription token',
-      details: error.message 
+      details: error.message
     });
   }
 });
@@ -232,7 +302,7 @@ router.post('/transcription-token', async (req, res) => {
 router.post('/interviews/:sessionId/start', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    
+
     const interviews = await db.collection('interviews')
       .where('sessionId', '==', sessionId)
       .limit(1)
@@ -246,9 +316,9 @@ router.post('/interviews/:sessionId/start', async (req, res) => {
     const interviewData = interviews.docs[0].data();
 
     if (interviewData.status !== 'scheduled') {
-      return res.status(400).json({ 
-        error: 'Interview cannot be started', 
-        details: `Current status: ${interviewData.status}` 
+      return res.status(400).json({
+        error: 'Interview cannot be started',
+        details: `Current status: ${interviewData.status}`
       });
     }
 
@@ -261,12 +331,12 @@ router.post('/interviews/:sessionId/start', async (req, res) => {
         level,
         numberOfQuestions: 8
       });
-      
+
       await interviewRef.update({
         questions,
         questionsGeneratedAt: new Date()
       });
-      
+
       interviewData.questions = questions;
     }
 
@@ -275,9 +345,9 @@ router.post('/interviews/:sessionId/start', async (req, res) => {
       startedAt: new Date()
     });
 
-    res.json({ 
+    res.json({
       question: interviewData.questions[0],
-      totalQuestions: interviewData.questions.length 
+      totalQuestions: interviewData.questions.length
     });
   } catch (error) {
     console.error('Start interview error:', error);
@@ -288,8 +358,8 @@ router.post('/interviews/:sessionId/start', async (req, res) => {
 /**
  * Submit Answer
  */
-router.post('/interviews/:sessionId/answer', 
-  upload.single('audio'), 
+router.post('/interviews/:sessionId/answer',
+  upload.single('audio'),
   async (req, res) => {
     try {
       const { sessionId } = req.params;
@@ -325,12 +395,12 @@ router.post('/interviews/:sessionId/answer',
       }
     } catch (error) {
       console.error('Error processing answer:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         error: 'Failed to process answer',
-        details: error.message 
+        details: error.message
       });
     }
-});
+  });
 
 /**
  * Get Next Question
@@ -351,14 +421,14 @@ router.get('/interviews/:sessionId/next-question', async (req, res) => {
 
     const interviewData = interviews.docs[0].data();
     const { questions = [] } = interviewData;
-    
+
     if (currentQuestionId >= questions.length) {
       await interviews.docs[0].ref.update({
         status: 'completed',
         completedAt: new Date()
       });
 
-      return res.json({ 
+      return res.json({
         isComplete: true,
         completedAt: new Date().toISOString()
       });
@@ -388,9 +458,9 @@ router.get('/interviews/:sessionId/next-question', async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching next question:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to fetch next question',
-      details: error.message 
+      details: error.message
     });
   }
 });
