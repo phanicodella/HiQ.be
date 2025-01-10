@@ -10,7 +10,7 @@ import authRoutes from './routes/auth.routes.js';
 import interviewRoutes from './routes/interview.routes.js';
 import { router as publicRoutes } from './routes/public.routes.js';
 import compression from 'compression';
-
+import accessRoutes from './routes/access.routes.js';
 // Load environment variables
 dotenv.config();
 process.env.NODE_ENV = 'development';
@@ -20,7 +20,7 @@ const PORT = process.env.PORT || 3000;
 // Security middleware
 app.use(helmet());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3001',
+  origin: process.env.FRONTEND_URL || 'https://talent-sync-gxapz34ii-phanicodellas-projects.vercel.app',
   credentials: true
 }));
 
@@ -43,6 +43,7 @@ const limiter = rateLimit({
 });
 
 app.use('/api/', limiter);
+app.use('/api/access', accessRoutes);
 
 // Request parsing - increased limits for file uploads
 app.use(express.json({ limit: '50mb' }));
