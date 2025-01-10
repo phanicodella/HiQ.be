@@ -1,9 +1,26 @@
 // backend/src/controllers/access.controller.js
-import { db } from '../config/firebase.js';
-import { sendAccessRequestEmail } from '../services/email.service.js';
+import { db, auth } from '../config/firebase.js';
+import { sendAccessRequestEmail, sendAccessApprovalEmail, sendAccessRejectionEmail } from '../services/email.service.js';
 
 class AccessController {
-  // Email domain validation method
+  constructor() {
+    this.submitRequest = this.submitRequest.bind(this);
+    this.listRequests = this.listRequests.bind(this);
+    this.approveRequest = this.approveRequest.bind(this);
+    this.rejectRequest = this.rejectRequest.bind(this);
+    this.validateEmail = this.validateEmail.bind(this);
+    this.validateWorkDomain = this.validateWorkDomain.bind(this);
+  }
+
+  validateWorkDomain(domain) {
+    if (!domain) return 'Work domain is required';
+    if (domain.length < 3) return 'Domain name is too short';
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9-_.]*[a-zA-Z0-9](?:\.[a-zA-Z]{2,})+$/.test(domain)) {
+      return 'Please enter a valid domain (e.g., company.com)';
+    }
+    return null;
+  }
+
   validateEmail(email) {
     const genericDomains = [
       'gmail.com', 
@@ -18,13 +35,11 @@ class AccessController {
       'msn.com'
     ];
 
-    // Basic email format validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return 'Invalid email format';
     }
 
-    // Check against generic domains
     const domain = email.split('@')[1].toLowerCase();
     if (genericDomains.includes(domain)) {
       return 'Please use a work email address';
@@ -42,31 +57,49 @@ class AccessController {
         message
       } = req.body;
 
-      // Validate email
+      // Validation checks
+      const validationErrors = {};
+
       const emailError = this.validateEmail(email);
       if (emailError) {
+        validationErrors.email = emailError;
+      }
+
+      const domainError = this.validateWorkDomain(workDomain);
+      if (domainError) {
+        validationErrors.workDomain = domainError;
+      }
+
+      if (teamSize !== undefined && teamSize !== '') {
+        const teamSizeNum = parseInt(teamSize);
+        if (isNaN(teamSizeNum) || teamSizeNum < 1) {
+          validationErrors.teamSize = 'Team size must be a positive number';
+        }
+      }
+
+      if (message && message.length > 1000) {
+        validationErrors.message = 'Message is too long (max 1000 characters)';
+      }
+
+      if (Object.keys(validationErrors).length > 0) {
         return res.status(400).json({
-          error: emailError
+          error: 'Validation failed',
+          details: validationErrors
         });
       }
 
-      // Validate required fields
-      if (!workDomain) {
-        return res.status(400).json({
-          error: 'Work domain is required'
-        });
-      }
-
-      // Normalize email
+      // Normalize email and domain
       const normalizedEmail = email.toLowerCase().trim();
+      const normalizedDomain = workDomain.toLowerCase().trim();
 
-      // Check if email already has a pending request
-      const existingRequests = await db.collection('accessRequests')
+      // Check for existing requests
+      const pendingRequest = await db.collection('accessRequests')
         .where('email', '==', normalizedEmail)
         .where('status', '==', 'pending')
+        .limit(1)
         .get();
 
-      if (!existingRequests.empty) {
+      if (!pendingRequest.empty) {
         return res.status(400).json({
           error: 'A request from this email is already pending'
         });
@@ -76,26 +109,34 @@ class AccessController {
       const requestRef = db.collection('accessRequests').doc();
       const now = new Date();
       
-      await requestRef.set({
-        workDomain,
+      const requestData = {
+        workDomain: normalizedDomain,
         email: normalizedEmail,
-        teamSize: teamSize || null,
+        teamSize: teamSize ? parseInt(teamSize) : null,
         message: message || null,
         status: 'pending',
         createdAt: now,
-        updatedAt: now
-      });
+        updatedAt: now,
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent')
+      };
+
+      await requestRef.set(requestData);
 
       // Send notification email to admin
-      await sendAccessRequestEmail({
-        to: process.env.ADMIN_EMAIL || 'getHiQaccess@talentsync.tech',
-        requestData: {
-          id: requestRef.id,
-          workDomain,
-          email: normalizedEmail,
-          teamSize: teamSize || 'Not specified'
-        }
-      });
+      try {
+        await sendAccessRequestEmail({
+          to: process.env.ADMIN_EMAIL || 'getHiQaccess@talentsync.tech',
+          requestData: {
+            id: requestRef.id,
+            workDomain: normalizedDomain,
+            email: normalizedEmail,
+            teamSize: teamSize || 'Not specified'
+          }
+        });
+      } catch (emailError) {
+        console.error('Failed to send admin notification:', emailError);
+      }
 
       res.status(201).json({
         message: 'Access request submitted successfully',
@@ -123,12 +164,11 @@ class AccessController {
       const requests = requestsSnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data(),
-        createdAt: doc.data().createdAt.toDate(),
-        updatedAt: doc.data().updatedAt.toDate()
+        createdAt: doc.data().createdAt?.toDate(),
+        updatedAt: doc.data().updatedAt?.toDate()
       }));
 
       res.json({ requests });
-
     } catch (error) {
       console.error('List access requests error:', error);
       res.status(500).json({
@@ -141,6 +181,7 @@ class AccessController {
   async approveRequest(req, res) {
     try {
       const { requestId } = req.params;
+      
       const requestRef = db.collection('accessRequests').doc(requestId);
       const request = await requestRef.get();
 
@@ -157,32 +198,12 @@ class AccessController {
         });
       }
 
-      // Generate temporary password
-      const temporaryPassword = this.generateTemporaryPassword();
-
-      // Create user account for approved request
-      const newUser = await this.createUserAccount({
-        email: requestData.email,
-        password: temporaryPassword,
-        displayName: requestData.workDomain
-      });
-
       // Update request status
       await requestRef.update({
         status: 'approved',
         approvedBy: req.user.uid,
         approvedAt: new Date(),
         updatedAt: new Date()
-      });
-
-      // Send approval email with credentials
-      await sendAccessApprovalEmail({
-        to: requestData.email,
-        userData: {
-          email: newUser.email,
-          password: temporaryPassword,
-          name: requestData.workDomain
-        }
       });
 
       res.json({
@@ -227,12 +248,15 @@ class AccessController {
         updatedAt: new Date()
       });
 
-      // Send rejection email
-      await sendAccessRejectionEmail({
-        to: requestData.email,
-        name: requestData.workDomain,
-        reason: reason || 'No specific reason provided'
-      });
+      try {
+        await sendAccessRejectionEmail({
+          to: requestData.email,
+          name: requestData.workDomain,
+          reason: reason || 'No specific reason provided'
+        });
+      } catch (emailError) {
+        console.error('Failed to send rejection email:', emailError);
+      }
 
       res.json({
         message: 'Access request rejected successfully'
@@ -245,33 +269,6 @@ class AccessController {
         details: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
-  }
-
-  // Helper method to generate temporary password
-  generateTemporaryPassword(length = 12) {
-    const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()';
-    let password = '';
-    for (let i = 0; i < length; i++) {
-      const randomIndex = Math.floor(Math.random() * charset.length);
-      password += charset[randomIndex];
-    }
-    return password;
-  }
-
-  // Placeholder method for user creation (implement in auth controller)
-  async createUserAccount({ email, password, displayName }) {
-    // This should be implemented in your auth controller
-    // Example implementation:
-    const userRecord = await auth.createUser({
-      email,
-      password,
-      displayName
-    });
-
-    return {
-      email: userRecord.email,
-      uid: userRecord.uid
-    };
   }
 }
 

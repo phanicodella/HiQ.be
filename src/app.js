@@ -3,7 +3,6 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import authRoutes from './routes/auth.routes.js';
@@ -16,6 +15,11 @@ dotenv.config();
 process.env.NODE_ENV = 'development';
 const app = express();
 const PORT = process.env.PORT || 3000;
+import rateLimit from 'express-rate-limit';
+
+// MOVED THESE TO THE TOP - Request parsing
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Security middleware
 app.use(helmet());
@@ -27,6 +31,17 @@ app.use(cors({
 // Compression
 app.use(compression());
 
+//accesslimiter
+const accessLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour window
+  max: 5, // limit each IP to 5 requests per windowMs
+  message: { 
+    error: 'Too many access requests from this IP, please try again after an hour' 
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: false // count successful requests
+});
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
@@ -45,10 +60,6 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 app.use('/api/access', accessRoutes);
 
-// Request parsing - increased limits for file uploads
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
 // Logging
 app.use(morgan('combined'));
 
@@ -61,6 +72,7 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/interviews', interviewRoutes);
 app.use('/api/public', publicRoutes);
+app.use('/api/access', accessLimiter, accessRoutes);
 
 // 404 handler
 app.use((req, res) => {
