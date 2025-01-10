@@ -249,7 +249,7 @@ router.post('/interviews/:sessionId/answer', upload.single('audio'), async (req,
 });
 
 /**
- * Complete Interview
+ * Complete Interview - Updated for immediate response
  */
 router.post('/interviews/:sessionId/complete', async (req, res) => {
   try {
@@ -268,20 +268,46 @@ router.post('/interviews/:sessionId/complete', async (req, res) => {
     const interviewData = interviews.docs[0].data();
     const interviewRef = interviews.docs[0].ref;
 
-    const allAnswers = questionHistory.map(q => ({
-      question: q.text,
-      answer: q.response
-    }));
-
-    const analysis = await cohereService.analyzeInterview(allAnswers);
-
+    // Update interview status immediately
     await interviewRef.update({
       status: 'completed',
       completedAt: new Date(),
-      analysis,
       questionHistory
     });
 
+    // Send immediate success response to candidate
+    res.json({ 
+      success: true, 
+      message: 'Thank you for completing the interview. Our team will review your responses and get back to you soon.'
+    });
+
+    // Process analysis and send feedback asynchronously
+    processInterviewAnalysis(interviewRef, interviewData, questionHistory).catch(error => {
+      console.error('Async analysis error:', error);
+    });
+
+  } catch (error) {
+    console.error('Complete interview error:', error);
+    res.status(500).json({
+      error: 'Failed to complete interview',
+      details: error.message
+    });
+  }
+});
+
+// Helper function to process interview analysis asynchronously
+async function processInterviewAnalysis(interviewRef, interviewData, questionHistory) {
+  try {
+    // Generate analysis
+    const analysis = await cohereService.analyzeInterview(questionHistory);
+
+    // Update interview document with analysis
+    await interviewRef.update({
+      analysis,
+      analysisCompletedAt: new Date()
+    });
+
+    // Send feedback email if interviewer email exists
     if (interviewData.interviewerEmail) {
       await sendInterviewFeedback({
         to: interviewData.interviewerEmail,
@@ -293,19 +319,15 @@ router.post('/interviews/:sessionId/complete', async (req, res) => {
       });
     }
 
-    res.json({ 
-      success: true, 
-      message: 'Interview completed successfully' 
-    });
-
   } catch (error) {
-    console.error('Complete interview error:', error);
-    res.status(500).json({
-      error: 'Failed to complete interview',
-      details: error.message
+    console.error('Interview analysis processing error:', error);
+    // Update document with error status
+    await interviewRef.update({
+      analysisError: error.message,
+      analysisErrorAt: new Date()
     });
   }
-});
+}
 
 /**
  * Start Interview

@@ -31,7 +31,7 @@ export async function sendInterviewInvite({ to, candidateName, type, level, sche
     const interviewLink = `${process.env.FRONTEND_URL}/${sessionId}`;
     
     await resend.emails.send({
-      from: process.env.EMAIL_FROM || 'HiQ AI <interviews@talentsync.tech>',
+      from: process.env.EMAIL_FROM || 'HiQ AI <hr@talentsync.tech>',
       to: [to],
       subject: `Interview Scheduled: ${type} Interview for ${level} Position`,
       html: `
@@ -120,7 +120,7 @@ export async function sendInterviewInvite({ to, candidateName, type, level, sche
 export async function sendInterviewComplete({ to, candidateName, type, interviewId }) {
   try {
     await resend.emails.send({
-      from: process.env.EMAIL_FROM || 'HiQ AI <interviews@talentsync.tech>',
+      from: process.env.EMAIL_FROM || 'HiQ AI <hr@talentsync.tech>',
       to: [to],
       subject: `${type} Interview Completed - Next Steps`,
       html: `
@@ -182,7 +182,7 @@ export async function sendInterviewComplete({ to, candidateName, type, interview
 export async function sendInterviewCancelled({ to, candidateName, type, scheduledTime }) {
   try {
     await resend.emails.send({
-      from: process.env.EMAIL_FROM || 'HiQ AI <interviews@talentsync.tech>',
+      from: process.env.EMAIL_FROM || 'HiQ AI <hr@talentsync.tech>',
       to: [to],
       subject: `${type} Interview Cancelled`,
       html: `

@@ -1,17 +1,10 @@
-/* 
- * backend/src/controllers/interview.controller.js
- * Handles all interview-related operations
- */
-
+// backend/src/controllers/interview.controller.js
 import { db } from '../config/firebase.js';
 import { nanoid } from 'nanoid';
 import { sendInterviewInvite } from '../services/email.service.js';
 import { cohereService } from '../services/cohere.service.js';
 
 class InterviewController {
-  /* 
-   * Create new interview session
-   */
   async createSession(req, res) {
     try {
       const { 
@@ -24,73 +17,49 @@ class InterviewController {
       
       const interviewerId = req.user.uid;
       const interviewerEmail = req.user.email;
-
-      console.log("the interviewer's email id is...>>>>>", interviewerEmail)
       
-      /* 
-       * Validate required fields
-       */
       if (!candidateEmail || !scheduledTime || !candidateName) {
         return res.status(400).json({
           error: 'Missing required fields'
         });
       }
 
-      /* 
-       * Generate unique session ID
-       */
       const sessionId = nanoid(10);
-
-      /* 
-       * Generate interview questions
-       */
-      console.log('Generating questions for:', { type, level });
-      const questions = await cohereService.generateInterviewQuestions({
-        type,
-        level,
-        numberOfQuestions: 3
-      });
-
-      /* 
-       * Create interview document
-       */
       const interviewRef = db.collection('interviews').doc();
       const now = new Date();
-      const date = new Date(scheduledTime);
       
+      // Create interview document with initial state
       await interviewRef.set({
-        sessionId,            // Add sessionId to document
+        sessionId,
         candidateEmail,
         candidateName,
         interviewerId,
-        interviewerEmail,    // Store interviewer's email
-        date,
+        interviewerEmail,
+        date: new Date(scheduledTime),
         level,
         type,
         status: 'scheduled',
-        questions,           // Store pre-generated questions
-        questionsGeneratedAt: now,
         createdAt: now,
         updatedAt: now
       });
 
-      /* 
-       * Send email to candidate
-       */
-      await sendInterviewInvite({
-        to: candidateEmail,
-        candidateName,
-        type,
-        level,
-        scheduledTime: date,
-        sessionId           // Pass sessionId to email service
-      });
-
+      // Return success response immediately
       res.status(201).json({
         message: 'Interview session created',
         sessionId,
         interviewId: interviewRef.id
       });
+
+      // Process remaining tasks asynchronously
+      this.processBackgroundTasks(interviewRef, {
+        type,
+        level,
+        candidateEmail,
+        candidateName,
+        scheduledTime,
+        sessionId
+      });
+
     } catch (error) {
       console.error('Create session error:', error);
       res.status(500).json({ 
@@ -99,9 +68,49 @@ class InterviewController {
     }
   }
 
-  /* 
-   * Get all interviews for an interviewer
-   */
+  async processBackgroundTasks(interviewRef, params) {
+    const {
+      type,
+      level,
+      candidateEmail,
+      candidateName,
+      scheduledTime,
+      sessionId
+    } = params;
+
+    try {
+      // Generate questions asynchronously
+      const questions = await cohereService.generateInterviewQuestions({
+        type,
+        level,
+        numberOfQuestions: 3
+      });
+
+      // Update interview with questions
+      await interviewRef.update({
+        questions,
+        questionsGeneratedAt: new Date()
+      });
+
+      // Send email invitation only after questions are generated
+      await sendInterviewInvite({
+        to: candidateEmail,
+        candidateName,
+        type,
+        level,
+        scheduledTime: new Date(scheduledTime),
+        sessionId
+      });
+    } catch (error) {
+      console.error('Background tasks error:', error);
+      // Update interview document with error status if needed
+      await interviewRef.update({
+        backgroundTasksError: error.message,
+        updatedAt: new Date()
+      });
+    }
+  }
+
   async getInterviews(req, res) {
     try {
       const interviewerId = req.user.uid;
@@ -129,9 +138,6 @@ class InterviewController {
     }
   }
 
-  /* 
-   * Cancel interview
-   */
   async cancelInterview(req, res) {
     try {
       const { id } = req.params;
