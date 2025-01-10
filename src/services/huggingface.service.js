@@ -21,7 +21,7 @@ function validateSetup() {
 /**
  * Generate behavioral interview questions using Mistral model
  */
-async function generateInterviewQuestions({ type = 'behavioral', level = 'mid', numberOfQuestions = 8 } = {}) {
+async function generateInterviewQuestions({ type = 'behavioral', level = 'mid', numberOfQuestions = 3 } = {}) {
   try {
     validateSetup();
     console.log('Generating questions using Mistral:', { type, level, numberOfQuestions });

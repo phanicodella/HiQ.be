@@ -16,7 +16,7 @@ const openai = new OpenAI({
  * @param {number} params.numberOfQuestions - Number of questions to generate
  * @returns {Promise<Array>} Array of generated questions
  */
-async function generateInterviewQuestions({ type = 'behavioral', level = 'mid', numberOfQuestions = 8 } = {}) {
+async function generateInterviewQuestions({ type = 'behavioral', level = 'mid', numberOfQuestions = 3 } = {}) {
   console.log('OpenAI Service - Starting question generation with:', { type, level, numberOfQuestions });
   console.log('OpenAI API Key length:', process.env.OPENAI_API_KEY?.length || 0);
   try {

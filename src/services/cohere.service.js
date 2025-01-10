@@ -4,7 +4,7 @@ const cohereClient = new CohereClient({
   token: process.env.COHERE_API_KEY 
 });
 
-const generateInterviewQuestions = async ({ type = 'behavioral', level = 'mid', numberOfQuestions = 8 } = {}) => {
+const generateInterviewQuestions = async ({ type = 'behavioral', level = 'mid', numberOfQuestions = 5 } = {}) => {
   try {
     console.log('Starting Cohere question generation:', { type, level, numberOfQuestions });
 

@@ -6,8 +6,8 @@ import axios from 'axios';
 import { db, admin } from '../config/firebase.js';
 const { cohereService } = await import('../services/cohere.service.js');
 import { CohereClient } from 'cohere-ai';
+import { sendInterviewFeedback } from '../services/email.feedback.js';
 const router = express.Router();
-// At the top of backend/src/routes/public.routes.js with other imports
 const { answerAnalysisService } = await import('../services/answer.service.js');
 
 import OpenAI from 'openai';
@@ -16,8 +16,6 @@ import OpenAI from 'openai';
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
-
-
 
 // Multer configuration for file uploads
 const upload = multer({
@@ -186,52 +184,73 @@ router.get('/interviews/:sessionId/questions', async (req, res) => {
     }
 
     const interviewData = interviews.docs[0].data();
-    const { type = 'behavioral', level = 'mid' } = interviewData;
-
-    const { cohereService } = await import('../services/cohere.service.js');
-    const questions = await cohereService.generateInterviewQuestions({
-      type,
-      level,
-      numberOfQuestions: 8
-    });
-
-    await interviews.docs[0].ref.update({
-      questions,
-      questionsGeneratedAt: new Date()
-    });
-
-    res.json({
-      questions,
-      type,
-      level
-    });
-
-  } catch (error) {
-    console.error('Question generation error:', error);
-    res.status(500).json({
-      error: error.message || 'Failed to generate questions'
-    });
-  }
-});
-
-router.post('/interviews/:sessionId/analyze-answer', async (req, res) => {
-  try {
-    const { question, answer } = req.body;
-
-    if (!question || !answer) {
-      return res.status(400).json({ error: 'Question and answer are required' });
+    
+    if (!interviewData.questions?.length) {
+      return res.status(500).json({ 
+        error: 'No questions found for this interview' 
+      });
     }
 
-    const analysis = await answerAnalysisService.analyzeAnswer(question, answer);
-    res.json({ analysis });
+    res.json({
+      questions: interviewData.questions,
+      type: interviewData.type,
+      level: interviewData.level
+    });
 
   } catch (error) {
-    console.error('Answer analysis error:', error);
+    console.error('Get questions error:', error);
     res.status(500).json({
-      error: error.message || 'Failed to analyze answer'
+      error: error.message || 'Failed to get interview questions'
     });
   }
 });
+
+/**
+ * Submit Answer
+ */
+router.post('/interviews/:sessionId/answer', upload.single('audio'), async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { transcript, questionId } = req.body;
+
+    if (!transcript) {
+      return res.status(200).json({ success: true });
+    }
+
+    const interviews = await db.collection('interviews')
+      .where('sessionId', '==', sessionId)
+      .limit(1)
+      .get();
+
+    if (!interviews.empty) {
+      const interview = interviews.docs[0];
+      const answer = {
+        questionId: parseInt(questionId),
+        transcript,
+        timestamp: new Date(),
+        audioUrl: req.file ? await storeAudio(req.file, sessionId, questionId) : null
+      };
+
+      await interview.ref.update({
+        answers: admin.firestore.FieldValue.arrayUnion(answer)
+      });
+
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: 'Interview not found' });
+    }
+  } catch (error) {
+    console.error('Error processing answer:', error);
+    res.status(500).json({
+      error: 'Failed to process answer',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * Complete Interview
+ */
 router.post('/interviews/:sessionId/complete', async (req, res) => {
   try {
     const { sessionId } = req.params;
@@ -247,55 +266,47 @@ router.post('/interviews/:sessionId/complete', async (req, res) => {
     }
 
     const interviewData = interviews.docs[0].data();
-    
-    console.log('Starting interview analysis for session:', sessionId);
-    
-    // Use the new analyzeInterview method
-    const analysis = await cohereService.analyzeInterview(questionHistory);
+    const interviewRef = interviews.docs[0].ref;
 
-    // Store analysis in Firestore
-    await interviews.docs[0].ref.update({
+    const allAnswers = questionHistory.map(q => ({
+      question: q.text,
+      answer: q.response
+    }));
+
+    const analysis = await cohereService.analyzeInterview(allAnswers);
+
+    await interviewRef.update({
       status: 'completed',
       completedAt: new Date(),
       analysis,
       questionHistory
     });
 
-    res.json({
-      success: true,
-      analysis
+    if (interviewData.interviewerEmail) {
+      await sendInterviewFeedback({
+        to: interviewData.interviewerEmail,
+        candidateName: interviewData.candidateName,
+        interviewType: interviewData.type,
+        analysis,
+        questionHistory,
+        isInterviewer: true
+      });
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Interview completed successfully' 
     });
 
   } catch (error) {
-    console.error('Interview completion error:', error);
-    res.status(500).json({ 
-      error: error.message || 'Failed to complete interview analysis'
-    });
-  }
-});
-router.post('/transcription-token', async (req, res) => {
-  try {
-    const response = await axios.post(
-      'https://api.assemblyai.com/v2/realtime/token',
-      { expires_in: 3600 },
-      {
-        headers: {
-          'Authorization': process.env.ASSEMBLY_AI_API_KEY,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    console.log('Got AssemblyAI token:', response.data);
-    res.json({ token: response.data.token });
-  } catch (error) {
-    console.error('Error getting transcription token:', error);
+    console.error('Complete interview error:', error);
     res.status(500).json({
-      error: 'Failed to get transcription token',
+      error: 'Failed to complete interview',
       details: error.message
     });
   }
 });
+
 /**
  * Start Interview
  */
@@ -322,22 +333,11 @@ router.post('/interviews/:sessionId/start', async (req, res) => {
       });
     }
 
-    // Ensure questions exist
     if (!interviewData.questions?.length) {
-      const { type = 'behavioral', level = 'mid' } = interviewData;
-      const { huggingFaceService } = await import('../services/huggingface.service.js');
-      const questions = await huggingFaceService.generateInterviewQuestions({
-        type,
-        level,
-        numberOfQuestions: 8
+      console.error('No pre-generated questions found for session:', sessionId);
+      return res.status(500).json({ 
+        error: 'Interview questions not found' 
       });
-
-      await interviewRef.update({
-        questions,
-        questionsGeneratedAt: new Date()
-      });
-
-      interviewData.questions = questions;
     }
 
     await interviewRef.update({
@@ -346,122 +346,15 @@ router.post('/interviews/:sessionId/start', async (req, res) => {
     });
 
     res.json({
+      questions: interviewData.questions,
       question: interviewData.questions[0],
-      totalQuestions: interviewData.questions.length
+      totalQuestions: interviewData.questions.length,
+      sessionId: sessionId
     });
+
   } catch (error) {
     console.error('Start interview error:', error);
     res.status(500).json({ error: 'Failed to start interview' });
-  }
-});
-
-/**
- * Submit Answer
- */
-router.post('/interviews/:sessionId/answer',
-  upload.single('audio'),
-  async (req, res) => {
-    try {
-      const { sessionId } = req.params;
-      const { transcript, questionId } = req.body;
-
-      // Don't require audio, just transcript
-      if (!transcript) {
-        return res.status(200).json({ success: true });
-      }
-
-      const interviews = await db.collection('interviews')
-        .where('sessionId', '==', sessionId)
-        .limit(1)
-        .get();
-
-      if (!interviews.empty) {
-        const interview = interviews.docs[0];
-        const answer = {
-          questionId: parseInt(questionId),
-          transcript,
-          timestamp: new Date(),
-          audioUrl: req.file ? await storeAudio(req.file, sessionId, questionId) : null
-        };
-
-        // Store the answer
-        await interview.ref.update({
-          answers: admin.firestore.FieldValue.arrayUnion(answer)
-        });
-
-        res.json({ success: true });
-      } else {
-        res.status(404).json({ error: 'Interview not found' });
-      }
-    } catch (error) {
-      console.error('Error processing answer:', error);
-      res.status(500).json({
-        error: 'Failed to process answer',
-        details: error.message
-      });
-    }
-  });
-
-/**
- * Get Next Question
- */
-router.get('/interviews/:sessionId/next-question', async (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    const currentQuestionId = parseInt(req.query.current || '1');
-
-    const interviews = await db.collection('interviews')
-      .where('sessionId', '==', sessionId)
-      .limit(1)
-      .get();
-
-    if (interviews.empty) {
-      return res.status(404).json({ error: 'Interview not found' });
-    }
-
-    const interviewData = interviews.docs[0].data();
-    const { questions = [] } = interviewData;
-
-    if (currentQuestionId >= questions.length) {
-      await interviews.docs[0].ref.update({
-        status: 'completed',
-        completedAt: new Date()
-      });
-
-      return res.json({
-        isComplete: true,
-        completedAt: new Date().toISOString()
-      });
-    }
-
-    const nextQuestion = questions[currentQuestionId];
-
-    // Validate question type matches interview type
-    if (nextQuestion.type !== interviewData.type) {
-      console.error('Question type mismatch:', {
-        expected: interviewData.type,
-        got: nextQuestion.type
-      });
-      return res.status(500).json({ error: 'Invalid question type' });
-    }
-
-    await interviews.docs[0].ref.update({
-      currentQuestionId: currentQuestionId + 1,
-      lastQuestionAt: new Date()
-    });
-
-    res.json({
-      question: nextQuestion,
-      questionNumber: currentQuestionId + 1,
-      totalQuestions: questions.length,
-      isComplete: false
-    });
-  } catch (error) {
-    console.error('Error fetching next question:', error);
-    res.status(500).json({
-      error: 'Failed to fetch next question',
-      details: error.message
-    });
   }
 });
 

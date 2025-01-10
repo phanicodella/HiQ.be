@@ -6,6 +6,7 @@
 import { db } from '../config/firebase.js';
 import { nanoid } from 'nanoid';
 import { sendInterviewInvite } from '../services/email.service.js';
+import { cohereService } from '../services/cohere.service.js';
 
 class InterviewController {
   /* 
@@ -22,6 +23,9 @@ class InterviewController {
       } = req.body;
       
       const interviewerId = req.user.uid;
+      const interviewerEmail = req.user.email;
+
+      console.log("the interviewer's email id is...>>>>>", interviewerEmail)
       
       /* 
        * Validate required fields
@@ -38,6 +42,16 @@ class InterviewController {
       const sessionId = nanoid(10);
 
       /* 
+       * Generate interview questions
+       */
+      console.log('Generating questions for:', { type, level });
+      const questions = await cohereService.generateInterviewQuestions({
+        type,
+        level,
+        numberOfQuestions: 3
+      });
+
+      /* 
        * Create interview document
        */
       const interviewRef = db.collection('interviews').doc();
@@ -49,10 +63,13 @@ class InterviewController {
         candidateEmail,
         candidateName,
         interviewerId,
+        interviewerEmail,    // Store interviewer's email
         date,
         level,
         type,
         status: 'scheduled',
+        questions,           // Store pre-generated questions
+        questionsGeneratedAt: now,
         createdAt: now,
         updatedAt: now
       });
