@@ -1,6 +1,7 @@
 // backend/src/controllers/access.controller.js
 import { db, auth } from '../config/firebase.js';
 import { sendAccessRequestEmail, sendAccessApprovalEmail, sendAccessRejectionEmail } from '../services/email.service.js';
+import { tokenService } from '../services/token.service.js';
 
 class AccessController {
   constructor() {
@@ -198,13 +199,29 @@ class AccessController {
         });
       }
 
+      // Generate one-time registration token
+      const registrationToken = await tokenService.generateOneTimeToken(requestData.email);
+
       // Update request status
       await requestRef.update({
         status: 'approved',
         approvedBy: req.user.uid,
         approvedAt: new Date(),
-        updatedAt: new Date()
+        updatedAt: new Date(),
+        registrationToken
       });
+
+      // Send approval email with registration link
+      try {
+        await sendAccessApprovalEmail({
+          to: requestData.email,
+          name: requestData.workDomain,
+          registrationToken,
+          registrationUrl: `${process.env.FRONTEND_URL}/register/${registrationToken}`
+        });
+      } catch (emailError) {
+        console.error('Failed to send approval email:', emailError);
+      }
 
       res.json({
         message: 'Access request approved successfully'

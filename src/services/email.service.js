@@ -1,3 +1,4 @@
+// backend/src/services/email.service.js
 import { Resend } from 'resend';
 import dotenv from 'dotenv';
 
@@ -117,7 +118,7 @@ export async function sendAccessRequestEmail({ to, requestData }) {
     await resend.emails.send({
       from: process.env.EMAIL_FROM || 'HiQ AI <admin@talentsync.tech>',
       to: [to],
-      subject: `New Access Request: ${requestData.companyName}`,
+      subject: `New Access Request: ${requestData.workDomain}`,
       html: `
         <!DOCTYPE html>
         <html>
@@ -128,18 +129,34 @@ export async function sendAccessRequestEmail({ to, requestData }) {
         </head>
         <body style="font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; color: #333333;">
           <div style="max-width: 600px; margin: 0 auto;">
-            <h2>New Access Request Received</h2>
-            
-            <div style="background-color: #f9f9f9; padding: 20px; border-radius: 5px; margin: 20px 0;">
-              <p><strong>Company:</strong> ${requestData.companyName}</p>
-              <p><strong>Name:</strong> ${requestData.name}</p>
-              <p><strong>Email:</strong> ${requestData.email}</p>
+            <div style="text-align: center; margin-bottom: 30px;">
+              <h1 style="color: #4f46e5; margin: 0;">HiQ AI</h1>
+              <p style="color: #666666; margin-top: 5px;">Access Request System</p>
             </div>
             
-            <a href="${process.env.FRONTEND_URL}/admin/access-requests" 
-               style="display: inline-block; padding: 10px 20px; background-color: #4F46E5; color: white; text-decoration: none; border-radius: 5px;">
-              Review Request
-            </a>
+            <div style="background-color: #f9f9f9; padding: 20px; border-radius: 5px; margin: 20px 0;">
+              <h2 style="color: #111827; margin-bottom: 20px;">New Access Request Received</h2>
+              
+              <div style="margin-bottom: 20px;">
+                <p><strong>Company Domain:</strong> ${requestData.workDomain}</p>
+                <p><strong>Email:</strong> ${requestData.email}</p>
+                <p><strong>Team Size:</strong> ${requestData.teamSize || 'Not specified'}</p>
+                <p><strong>Request Time:</strong> ${formatDate(new Date())}</p>
+                ${requestData.message ? `<p><strong>Additional Message:</strong> ${requestData.message}</p>` : ''}
+              </div>
+              
+              <div style="margin-top: 30px;">
+                <a href="${process.env.FRONTEND_URL}/admin/access-requests" 
+                   style="display: inline-block; padding: 12px 24px; background-color: #4F46E5; color: white; text-decoration: none; border-radius: 5px; font-weight: 500;">
+                  Review Request
+                </a>
+              </div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 30px; color: #6b7280; font-size: 0.875rem;">
+              <p style="margin: 0;">This is an automated message from HiQ AI Access Management System</p>
+              <p style="margin: 5px 0 0 0;">© ${new Date().getFullYear()} HiQ AI. All rights reserved.</p>
+            </div>
           </div>
         </body>
         </html>
@@ -153,7 +170,7 @@ export async function sendAccessRequestEmail({ to, requestData }) {
   }
 }
 
-export async function sendAccessApprovalEmail({ to, userData }) {
+export async function sendAccessApprovalEmail({ to, name, registrationToken, registrationUrl }) {
   try {
     await resend.emails.send({
       from: process.env.EMAIL_FROM || 'HiQ AI <admin@talentsync.tech>',
@@ -169,23 +186,46 @@ export async function sendAccessApprovalEmail({ to, userData }) {
         </head>
         <body style="font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; color: #333333;">
           <div style="max-width: 600px; margin: 0 auto;">
-            <h2>Welcome to HiQ AI!</h2>
-            
-            <p>Dear ${userData.name},</p>
-            
-            <p>Your access request has been approved. You can now log in to HiQ AI using the following credentials:</p>
-            
-            <div style="background-color: #f9f9f9; padding: 20px; border-radius: 5px; margin: 20px 0;">
-              <p><strong>Email:</strong> ${userData.email}</p>
-              <p><strong>Temporary Password:</strong> ${userData.password}</p>
+            <div style="text-align: center; margin-bottom: 30px;">
+              <h1 style="color: #4f46e5; margin: 0;">HiQ AI</h1>
+              <p style="color: #666666; margin-top: 5px;">Access Approval</p>
             </div>
             
-            <p>Please change your password after your first login.</p>
+            <div style="background-color: #f9f9f9; padding: 20px; border-radius: 5px; margin: 20px 0;">
+              <h2 style="color: #111827; margin-bottom: 20px;">Welcome to HiQ AI!</h2>
+              
+              <p>Dear ${name},</p>
+              
+              <p>We're pleased to inform you that your access request has been approved. You can now create your account using the registration link below:</p>
+              
+              <div style="margin: 30px 0; text-align: center;">
+                <a href="${registrationUrl}" 
+                   style="display: inline-block; padding: 12px 24px; background-color: #4F46E5; color: white; text-decoration: none; border-radius: 5px; font-weight: 500;">
+                  Create Your Account
+                </a>
+              </div>
+              
+              <div style="background-color: #f3f4f6; padding: 15px; border-radius: 5px; margin-top: 20px;">
+                <p style="margin: 0; font-size: 0.875rem; color: #4b5563;">
+                  <strong>Important Notes:</strong>
+                </p>
+                <ul style="margin: 10px 0 0 0; padding-left: 20px; color: #4b5563; font-size: 0.875rem;">
+                  <li>This registration link is valid for 24 hours only</li>
+                  <li>The link can be used only once</li>
+                  <li>For security reasons, you must use the same email address (${to}) for registration</li>
+                  <li>After registration, you'll need to log in at least once every 24 hours to maintain access</li>
+                </ul>
+              </div>
+
+              <div style="margin-top: 20px;">
+                <p>If you have any questions or need assistance, please contact our support team.</p>
+              </div>
+            </div>
             
-            <a href="${process.env.FRONTEND_URL}/login" 
-               style="display: inline-block; padding: 10px 20px; background-color: #4F46E5; color: white; text-decoration: none; border-radius: 5px;">
-              Login to HiQ AI
-            </a>
+            <div style="text-align: center; margin-top: 30px; color: #6b7280; font-size: 0.875rem;">
+              <p style="margin: 0;">This is an automated message from HiQ AI Access Management System</p>
+              <p style="margin: 5px 0 0 0;">© ${new Date().getFullYear()} HiQ AI. All rights reserved.</p>
+            </div>
           </div>
         </body>
         </html>
@@ -215,17 +255,35 @@ export async function sendAccessRejectionEmail({ to, name, reason }) {
         </head>
         <body style="font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; color: #333333;">
           <div style="max-width: 600px; margin: 0 auto;">
-            <h2>Access Request Update</h2>
+            <div style="text-align: center; margin-bottom: 30px;">
+              <h1 style="color: #4f46e5; margin: 0;">HiQ AI</h1>
+              <p style="color: #666666; margin-top: 5px;">Access Request Update</p>
+            </div>
             
-            <p>Dear ${name},</p>
+            <div style="background-color: #f9f9f9; padding: 20px; border-radius: 5px; margin: 20px 0;">
+              <h2 style="color: #111827; margin-bottom: 20px;">Access Request Update</h2>
+              
+              <p>Dear ${name},</p>
+              
+              <p>Thank you for your interest in HiQ AI. After careful review of your access request, we regret to inform you that we are unable to approve your request at this time.</p>
+              
+              ${reason ? `
+              <div style="background-color: #f3f4f6; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                <p style="margin: 0; color: #4b5563;">
+                  <strong>Reason:</strong> ${reason}
+                </p>
+              </div>
+              ` : ''}
+              
+              <p>We encourage you to apply again in the future as our capacity expands.</p>
+              
+              <p>Best regards,<br>HiQ AI Team</p>
+            </div>
             
-            <p>Thank you for your interest in HiQ AI. After careful review of your access request, we regret to inform you that we are unable to approve your request at this time.</p>
-            
-            ${reason ? `<p><strong>Reason:</strong> ${reason}</p>` : ''}
-            
-            <p>We encourage you to apply again in the future as our capacity expands.</p>
-            
-            <p>Best regards,<br>HiQ AI Team</p>
+            <div style="text-align: center; margin-top: 30px; color: #6b7280; font-size: 0.875rem;">
+              <p style="margin: 0;">This is an automated message from HiQ AI Access Management System</p>
+              <p style="margin: 5px 0 0 0;">© ${new Date().getFullYear()} HiQ AI. All rights reserved.</p>
+            </div>
           </div>
         </body>
         </html>
@@ -235,6 +293,127 @@ export async function sendAccessRejectionEmail({ to, name, reason }) {
     return { success: true };
   } catch (error) {
     console.error('Access rejection email error:', error);
+    throw error;
+  }
+}
+
+export async function sendSessionExpiryWarningEmail({ to, name }) {
+  try {
+    await resend.emails.send({
+      from: process.env.EMAIL_FROM || 'HiQ AI <admin@talentsync.tech>',
+      to: [to],
+      subject: 'HiQ AI Session Expiry Warning',
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Session Expiry Warning</title>
+        </head>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; color: #333333;">
+          <div style="max-width: 600px; margin: 0 auto;">
+            <div style="text-align: center; margin-bottom: 30px;">
+              <h1 style="color: #4f46e5; margin: 0;">HiQ AI</h1>
+              <p style="color: #666666; margin-top: 5px;">Session Warning</p>
+            </div>
+            
+            <div style="background-color: #fff3cd; padding: 20px; border-radius: 5px; margin: 20px 0; border: 1px solid #ffeeba;">
+              <h2 style="color: #856404; margin-bottom: 20px;">Session Expiry Warning</h2>
+              
+              <p>Dear ${name},</p>
+              
+              <p>Your HiQ AI session will expire in less than 2 hours. To maintain uninterrupted access to the platform, please log in to your account before the 24-hour period expires.</p>
+              
+              <div style="margin: 30px 0; text-align: center;">
+                <a href="${process.env.FRONTEND_URL}/login" 
+                   style="display: inline-block; padding: 12px 24px; background-color: #4F46E5; color: white; text-decoration: none; border-radius: 5px; font-weight: 500;">
+                  Login Now
+                </a>
+              </div>
+              
+              <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin-top: 20px;">
+                <p style="margin: 0; font-size: 0.875rem; color: #4b5563;">
+                  <strong>Why am I receiving this?</strong><br>
+                  HiQ AI requires users to log in at least once every 24 hours for security purposes. If you don't log in before the period expires, you'll need to request access reactivation from your administrator.
+                </p>
+              </div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 30px; color: #6b7280; font-size: 0.875rem;">
+              <p style="margin: 0;">This is an automated message from HiQ AI Access Management System</p>
+              <p style="margin: 5px 0 0 0;">© ${new Date().getFullYear()} HiQ AI. All rights reserved.</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error('Session expiry warning email error:', error);
+    throw error;
+  }
+}
+
+export async function sendSessionExpiredEmail({ to, name }) {
+  try {
+    await resend.emails.send({
+      from: process.env.EMAIL_FROM || 'HiQ AI <admin@talentsync.tech>',
+      to: [to],
+      subject: 'HiQ AI Session Expired - Action Required',
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Session Expired</title>
+        </head>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; color: #333333;">
+          <div style="max-width: 600px; margin: 0 auto;">
+            <div style="text-align: center; margin-bottom: 30px;">
+              <h1 style="color: #4f46e5; margin: 0;">HiQ AI</h1>
+              <p style="color: #666666; margin-top: 5px;">Session Expired</p>
+            </div>
+            
+            <div style="background-color: #f8d7da; padding: 20px; border-radius: 5px; margin: 20px 0; border: 1px solid #f5c6cb;">
+              <h2 style="color: #721c24; margin-bottom: 20px;">Session Expired</h2>
+              
+              <p>Dear ${name},</p>
+              
+              <p>Your HiQ AI session has expired due to inactivity for more than 24 hours. For security purposes, your access has been temporarily suspended.</p>
+              
+              <div style="margin: 30px 0;">
+                <p><strong>To restore access:</strong></p>
+                <ol style="color: #4b5563;">
+                  <li>Contact your administrator to request access reactivation</li>
+                  <li>Once reactivated, log in to your account</li>
+                  <li>Ensure to log in at least once every 24 hours to maintain access</li>
+                </ol>
+              </div>
+              
+              <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin-top: 20px;">
+                <p style="margin: 0; font-size: 0.875rem; color: #4b5563;">
+                  <strong>Note:</strong> This security measure is in place to protect your account and maintain platform security. Regular login activity is required to maintain active status.
+                </p>
+              </div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 30px; color: #6b7280; font-size: 0.875rem;">
+              <p style="margin: 0;">This is an automated message from HiQ AI Access Management System</p>
+              <p style="margin: 5px 0 0 0;">© ${new Date().getFullYear()} HiQ AI. All rights reserved.</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error('Session expired email error:', error);
     throw error;
   }
 }

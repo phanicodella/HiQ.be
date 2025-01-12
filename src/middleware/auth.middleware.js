@@ -1,79 +1,100 @@
-/* 
- * backend/src/middleware/auth.middleware.js
- * Handles authentication using Firebase Admin SDK
- */
-
+// backend/src/middleware/auth.middleware.js
 import { auth } from '../config/firebase.js';
 
-/* 
- * Verify Firebase authentication token
- */
-export const verifyAuth = async (req, res, next) => {
+export const requireRecentLogin = async (req, res, next) => {
   try {
-    const token = req.headers.authorization?.split('Bearer ')[1];
-
-    if (!token) {
-      return res.status(401).json({ 
-        error: 'Authentication required' 
+    const { lastLogin } = req.user.customClaims || {};
+    
+    if (!lastLogin) {
+      return res.status(401).json({
+        error: 'Login required',
+        requiresLogin: true
       });
     }
 
-    const decodedToken = await auth.verifyIdToken(token);
-    req.user = {
-      uid: decodedToken.uid,
-      email: decodedToken.email,
-      role: 'interviewer'
-    };
+    const lastLoginDate = new Date(lastLogin);
+    const twentyFourHoursAgo = new Date();
+    twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+
+    if (lastLoginDate < twentyFourHoursAgo) {
+      return res.status(401).json({
+        error: 'Recent login required',
+        requiresLogin: true
+      });
+    }
+
     next();
   } catch (error) {
-    return res.status(401).json({ 
-      error: 'Invalid authentication token' 
-    });
+    res.status(500).json({ error: 'Failed to verify login status' });
   }
 };
 
-/* 
- * Require specific role
- */
-export const requireRole = (allowedRoles) => {
-  return (req, res, next) => {
-    if (!allowedRoles.includes(req.user.role)) {
-      return res.status(403).json({ 
-        error: 'Access denied' 
+// Add the missing exports needed by auth.routes.js
+export const verifyAuth = async (req, res, next) => {
+  try {
+    const { authorization } = req.headers;
+    if (!authorization?.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const token = authorization.split('Bearer ')[1];
+    const decodedToken = await auth.verifyIdToken(token);
+    
+    // Get full user data including custom claims
+    const user = await auth.getUser(decodedToken.uid);
+    req.user = { ...decodedToken, customClaims: user.customClaims };
+    
+    next();
+  } catch (error) {
+    console.error('Auth middleware error:', error);
+    res.status(401).json({ error: 'Invalid token' });
+  }
+};
+
+export const requireEmailVerified = async (req, res, next) => {
+  try {
+    const user = await auth.getUser(req.user.uid);
+    if (!user.emailVerified) {
+      return res.status(403).json({
+        error: 'Email verification required',
+        requiresVerification: true
       });
     }
     next();
-  };
-};
-
-/* 
- * Require email verification
- */
-export const requireEmailVerified = (req, res, next) => {
-  if (!req.user.emailVerified) {
-    return res.status(403).json({ 
-      error: 'Email verification required' 
-    });
+  } catch (error) {
+    console.error('Email verification check error:', error);
+    res.status(500).json({ error: 'Failed to verify email status' });
   }
-  next();
 };
 
-/* 
- * Check resource ownership
- */
-export const requireOwnership = (getResourceId) => {
+export const requireRole = (allowedRoles) => {
   return async (req, res, next) => {
     try {
-      const resourceId = await getResourceId(req);
-      if (resourceId !== req.user.uid) {
-        return res.status(403).json({ 
-          error: 'Access denied' 
+      if (!req.user) {
+        return res.status(401).json({
+          error: 'Authentication required'
         });
       }
+
+      const { customClaims } = req.user;
+      const userRole = customClaims?.role || 'user';
+
+      if (!allowedRoles.includes(userRole)) {
+        return res.status(403).json({
+          error: 'Insufficient permissions',
+          required: allowedRoles,
+          current: userRole
+        });
+      }
+
+      // Add role to request for convenience
+      req.userRole = userRole;
       next();
-    } catch {
-      return res.status(403).json({ 
-        error: 'Access denied' 
+    } catch (error) {
+      console.error('Role verification error:', error);
+      res.status(500).json({ 
+        error: 'Failed to verify user role',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   };

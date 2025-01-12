@@ -1,5 +1,5 @@
 // backend/src/controllers/auth.controller.js
-import { auth } from '../config/firebase.js';
+import { auth, db } from '../config/firebase.js';
 
 class AuthController {
   /**
@@ -17,6 +17,7 @@ class AuthController {
         displayName: userRecord.displayName || null,
         photoURL: userRecord.photoURL || null,
         role: userRecord.customClaims?.role || 'user',
+        lastLogin: userRecord.customClaims?.lastLogin,
         createdAt: userRecord.metadata.creationTime,
         lastSignIn: userRecord.metadata.lastSignInTime
       };
@@ -34,6 +35,105 @@ class AuthController {
   }
 
   /**
+   * Register new user with one-time token
+   */
+  async registerWithToken(req, res) {
+    try {
+      const { token, email, password, displayName } = req.body;
+
+      // Token verification is handled by middleware
+      const { tokenData } = req;
+
+      if (email !== tokenData.email) {
+        return res.status(400).json({
+          error: 'Email does not match registration token'
+        });
+      }
+
+      // Create user account
+      const userRecord = await auth.createUser({
+        email,
+        password,
+        displayName,
+        emailVerified: true
+      });
+
+      // Set custom claims for interviewer role
+      await auth.setCustomUserClaims(userRecord.uid, {
+        role: 'interviewer',
+        lastLogin: new Date().toISOString()
+      });
+
+      // Mark token as used
+      await db.collection('registrationTokens')
+        .doc(token)
+        .update({
+          used: true,
+          usedAt: new Date(),
+          userId: userRecord.uid
+        });
+
+      // Create user profile
+      await db.collection('users').doc(userRecord.uid).set({
+        email: userRecord.email,
+        displayName: userRecord.displayName,
+        role: 'interviewer',
+        createdAt: new Date(),
+        lastLoginAt: new Date()
+      });
+
+      res.status(201).json({
+        message: 'Account created successfully',
+        user: {
+          uid: userRecord.uid,
+          email: userRecord.email,
+          displayName: userRecord.displayName
+        }
+      });
+
+    } catch (error) {
+      console.error('Register with token error:', error);
+      res.status(500).json({
+        error: 'Failed to create account',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+
+  /**
+   * Update user's last login timestamp
+   */
+  async updateLastLogin(req, res) {
+    try {
+      const { uid } = req.user;
+      const now = new Date().toISOString();
+
+      // Update custom claims
+      const customClaims = (await auth.getUser(uid)).customClaims || {};
+      await auth.setCustomUserClaims(uid, {
+        ...customClaims,
+        lastLogin: now
+      });
+
+      // Update user profile
+      await db.collection('users').doc(uid).update({
+        lastLoginAt: new Date()
+      });
+
+      res.json({ 
+        message: 'Last login updated successfully',
+        lastLogin: now
+      });
+    } catch (error) {
+      console.error('Update last login error:', error);
+      res.status(500).json({ 
+        error: 'Failed to update last login',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+
+  /**
    * Update user profile
    */
   async updateProfile(req, res) {
@@ -46,6 +146,14 @@ class AuthController {
       if (photoURL) updateData.photoURL = photoURL;
 
       await auth.updateUser(uid, updateData);
+
+      // Update profile in Firestore
+      if (Object.keys(updateData).length > 0) {
+        await db.collection('users').doc(uid).update({
+          ...updateData,
+          updatedAt: new Date()
+        });
+      }
 
       res.json({ 
         message: 'Profile updated successfully',
@@ -69,7 +177,10 @@ class AuthController {
     try {
       const { uid } = req.user;
       
-      // Add any cleanup tasks here (e.g., deleting user data)
+      // Delete user data from Firestore first
+      await db.collection('users').doc(uid).delete();
+      
+      // Delete user authentication record
       await auth.deleteUser(uid);
 
       res.json({ message: 'Account deleted successfully' });
@@ -91,6 +202,7 @@ class AuthController {
     try {
       const { userId } = req.params;
       const userRecord = await auth.getUser(userId);
+      const userProfile = await db.collection('users').doc(userId).get();
 
       const userData = {
         uid: userRecord.uid,
@@ -100,8 +212,9 @@ class AuthController {
         photoURL: userRecord.photoURL || null,
         role: userRecord.customClaims?.role || 'user',
         createdAt: userRecord.metadata.creationTime,
-        lastSignIn: userRecord.metadata.lastSignInTime,
-        disabled: userRecord.disabled
+        lastLogin: userRecord.customClaims?.lastLogin,
+        disabled: userRecord.disabled,
+        profile: userProfile.exists ? userProfile.data() : null
       };
 
       res.json({ user: userData });
@@ -127,6 +240,43 @@ class AuthController {
   }
 
   /**
+   * Admin: List users with pagination
+   */
+  async listUsers(req, res) {
+    try {
+      const { pageSize = 100, pageToken } = req.query;
+      
+      const listUsersResult = await auth.listUsers(parseInt(pageSize), pageToken);
+      
+      const users = await Promise.all(listUsersResult.users.map(async userRecord => {
+        const userProfile = await db.collection('users').doc(userRecord.uid).get();
+        return {
+          uid: userRecord.uid,
+          email: userRecord.email,
+          displayName: userRecord.displayName,
+          role: userRecord.customClaims?.role || 'user',
+          lastLogin: userRecord.customClaims?.lastLogin,
+          disabled: userRecord.disabled,
+          profile: userProfile.exists ? userProfile.data() : null
+        };
+      }));
+
+      res.json({
+        users,
+        pageToken: listUsersResult.pageToken
+      });
+    } catch (error) {
+      console.error('List Users Error:', error);
+      res.status(500).json({
+        error: {
+          message: 'Failed to list users',
+          code: error.code || 'auth/unknown-error'
+        }
+      });
+    }
+  }
+
+  /**
    * Admin: Update user role
    */
   async updateUserRole(req, res) {
@@ -134,7 +284,7 @@ class AuthController {
       const { userId } = req.params;
       const { role } = req.body;
 
-      const allowedRoles = ['user', 'admin', 'moderator'];
+      const allowedRoles = ['user', 'admin', 'interviewer', 'moderator'];
       if (!allowedRoles.includes(role)) {
         return res.status(400).json({
           error: {
@@ -144,7 +294,18 @@ class AuthController {
         });
       }
 
-      await auth.setCustomUserClaims(userId, { role });
+      const userRecord = await auth.getUser(userId);
+      const customClaims = userRecord.customClaims || {};
+
+      await auth.setCustomUserClaims(userId, { 
+        ...customClaims,
+        role 
+      });
+
+      await db.collection('users').doc(userId).update({
+        role,
+        updatedAt: new Date()
+      });
 
       res.json({ 
         message: 'User role updated successfully',
@@ -166,38 +327,6 @@ class AuthController {
         error: {
           message: 'Failed to update user role',
           code: error.code || 'auth/update-failed'
-        }
-      });
-    }
-  }
-
-  /**
-   * Admin: List users with pagination
-   */
-  async listUsers(req, res) {
-    try {
-      const { pageSize = 100, pageToken } = req.query;
-      
-      const listUsersResult = await auth.listUsers(parseInt(pageSize), pageToken);
-      
-      const users = listUsersResult.users.map(userRecord => ({
-        uid: userRecord.uid,
-        email: userRecord.email,
-        displayName: userRecord.displayName,
-        role: userRecord.customClaims?.role || 'user',
-        disabled: userRecord.disabled
-      }));
-
-      res.json({
-        users,
-        pageToken: listUsersResult.pageToken
-      });
-    } catch (error) {
-      console.error('List Users Error:', error);
-      res.status(500).json({
-        error: {
-          message: 'Failed to list users',
-          code: error.code || 'auth/unknown-error'
         }
       });
     }
