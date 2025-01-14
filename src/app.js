@@ -1,64 +1,62 @@
 // backend/src/app.js
-
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
+import compression from 'compression';
+import rateLimit from 'express-rate-limit';
+
 import authRoutes from './routes/auth.routes.js';
 import interviewRoutes from './routes/interview.routes.js';
 import { router as publicRoutes } from './routes/public.routes.js';
-import compression from 'compression';
 import accessRoutes from './routes/access.routes.js';
+
 // Load environment variables
 dotenv.config();
 process.env.NODE_ENV = 'development';
+
 const app = express();
 const PORT = process.env.PORT || 3000;
-import rateLimit from 'express-rate-limit';
 
-// MOVED THESE TO THE TOP - Request parsing
+// Request parsing - at the top
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Security middleware
 app.use(helmet());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'https://talent-sync-gxapz34ii-phanicodellas-projects.vercel.app',
+  origin: process.env.FRONTEND_URL || 'http://localhost:3001',
   credentials: true
 }));
 
 // Compression
 app.use(compression());
 
-//accesslimiter
+// Rate limiting
 const accessLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour window
-  max: 5, // limit each IP to 5 requests per windowMs
+  windowMs: 60 * 60 * 1000,
+  max: 500,
   message: { 
     error: 'Too many access requests from this IP, please try again after an hour' 
   },
   standardHeaders: true,
   legacyHeaders: false,
-  skipSuccessfulRequests: false // count successful requests
+  skipSuccessfulRequests: false
 });
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, 
-  max: 2000, // Increased for video processing
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 2000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
   skip: (req) => {
-    // Skip rate limiting for streaming endpoints
     return req.path.includes('/fraud-detection') || 
            req.path.includes('/answer') ||
            req.path.includes('/speech-analysis');
   }
 });
-
-app.use('/api/', limiter);
-app.use('/api/access', accessRoutes);
 
 // Logging
 app.use(morgan('combined'));
@@ -68,11 +66,11 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
-// API Routes - ensure all are prefixed with /api
-app.use('/api/auth', authRoutes);
-app.use('/api/interviews', interviewRoutes);
-app.use('/api/public', publicRoutes);
+// API Routes
+app.use('/api/auth', authRoutes);  // Auth routes first for token verification
 app.use('/api/access', accessLimiter, accessRoutes);
+app.use('/api/interviews', apiLimiter, interviewRoutes);
+app.use('/api/public', apiLimiter, publicRoutes);
 
 // 404 handler
 app.use((req, res) => {
@@ -99,7 +97,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start server with error handling
+// Start server
 const startServer = () => {
   try {
     app.listen(PORT, () => {

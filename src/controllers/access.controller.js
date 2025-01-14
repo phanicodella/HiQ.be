@@ -2,6 +2,7 @@
 import { db, auth } from '../config/firebase.js';
 import { sendAccessRequestEmail, sendAccessApprovalEmail, sendAccessRejectionEmail } from '../services/email.service.js';
 import { tokenService } from '../services/token.service.js';
+import crypto from 'crypto';
 
 class AccessController {
   constructor() {
@@ -11,6 +12,8 @@ class AccessController {
     this.rejectRequest = this.rejectRequest.bind(this);
     this.validateEmail = this.validateEmail.bind(this);
     this.validateWorkDomain = this.validateWorkDomain.bind(this);
+    this.verifyToken = this.verifyToken.bind(this);
+    this.generateRegistrationToken = this.generateRegistrationToken.bind(this);
   }
 
   validateWorkDomain(domain) {
@@ -47,6 +50,79 @@ class AccessController {
     }
 
     return null;
+  }
+
+  async generateRegistrationToken(email) {
+    const token = crypto.randomBytes(32).toString('hex');
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + (24 * 60 * 60 * 1000)); // 24 hours
+
+    await db.collection('registrationTokens').doc(token).set({
+      email,
+      used: false,
+      createdAt: now,
+      expiresAt,
+      attempts: 0,
+      lastAttemptAt: null
+    });
+
+    return token;
+  }
+
+  async verifyToken(req, res) {
+    try {
+      const { token } = req.body;
+
+      if (!token) {
+        return res.status(400).json({
+          error: 'Token is required'
+        });
+      }
+
+      console.log('Verifying token:', token);
+      const tokenDoc = await db.collection('registrationTokens').doc(token).get();
+
+      if (!tokenDoc.exists) {
+        console.log('Token not found');
+        return res.status(404).json({
+          error: 'Invalid registration token'
+        });
+      }
+
+      const tokenData = tokenDoc.data();
+      console.log('Token data:', tokenData);
+
+      if (tokenData.used) {
+        return res.status(400).json({
+          error: 'This registration link has already been used'
+        });
+      }
+
+      const expiresAt = tokenData.expiresAt.toDate();
+      if (new Date() > expiresAt) {
+        return res.status(400).json({
+          error: 'Registration link has expired'
+        });
+      }
+
+      // Update last attempt
+      await tokenDoc.ref.update({
+        lastAttemptAt: new Date(),
+        attempts: tokenData.attempts + 1
+      });
+
+      res.json({
+        email: tokenData.email,
+        valid: true
+      });
+
+    } catch (error) {
+      console.error('Token verification error:', error);
+      res.status(500).json({
+        error: 'Failed to verify registration token',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
   }
 
   async submitRequest(req, res) {
@@ -89,11 +165,9 @@ class AccessController {
         });
       }
 
-      // Normalize email and domain
       const normalizedEmail = email.toLowerCase().trim();
       const normalizedDomain = workDomain.toLowerCase().trim();
 
-      // Check for existing requests
       const pendingRequest = await db.collection('accessRequests')
         .where('email', '==', normalizedEmail)
         .where('status', '==', 'pending')
@@ -105,8 +179,6 @@ class AccessController {
           error: 'A request from this email is already pending'
         });
       }
-
-      // Create access request
       const requestRef = db.collection('accessRequests').doc();
       const now = new Date();
       
@@ -124,7 +196,6 @@ class AccessController {
 
       await requestRef.set(requestData);
 
-      // Send notification email to admin
       try {
         await sendAccessRequestEmail({
           to: process.env.ADMIN_EMAIL || 'getHiQaccess@talentsync.tech',
@@ -199,10 +270,8 @@ class AccessController {
         });
       }
 
-      // Generate one-time registration token
-      const registrationToken = await tokenService.generateOneTimeToken(requestData.email);
+      const registrationToken = await this.generateRegistrationToken(requestData.email);
 
-      // Update request status
       await requestRef.update({
         status: 'approved',
         approvedBy: req.user.uid,
@@ -211,7 +280,6 @@ class AccessController {
         registrationToken
       });
 
-      // Send approval email with registration link
       try {
         await sendAccessApprovalEmail({
           to: requestData.email,

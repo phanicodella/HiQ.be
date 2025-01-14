@@ -2,138 +2,125 @@
 import express from 'express';
 import { authController } from '../controllers/auth.controller.js';
 import { verifyAuth, requireEmailVerified, requireRole } from '../middleware/auth.middleware.js';
-import { auth } from '../config/firebase.js';
-
+import { auth, db } from '../config/firebase.js';  // Add db import here
+import { accessController } from '../controllers/access.controller.js';
 
 const router = express.Router();
 
-/**
-* User Management Routes
-*/
+// Public routes (no auth required)
+router.post('/verify-token', accessController.verifyToken);
+router.post('/validate-token', accessController.verifyToken);
 
-// Get current user profile
+// User Management Routes
 router.get('/me', 
- verifyAuth, 
- authController.getCurrentUser
+  verifyAuth, 
+  authController.getCurrentUser
 );
 
-// Update user profile
 router.put('/me',
- verifyAuth,
- requireEmailVerified,
- authController.updateProfile
+  verifyAuth,
+  requireEmailVerified,
+  authController.updateProfile
 );
 
-// Delete account
 router.delete('/me',
- verifyAuth,
- requireEmailVerified,
- authController.deleteAccount
+  verifyAuth,
+  requireEmailVerified,
+  authController.deleteAccount
 );
 
-/**
-* Admin Routes
-*/
-
-// Get user by ID
+// Admin Routes
 router.get('/users/:userId',
- verifyAuth,
- requireEmailVerified,
- requireRole(['admin']),
- authController.getUserById
+  verifyAuth,
+  requireEmailVerified,
+  requireRole(['admin']),
+  authController.getUserById
 );
 
-// Update user role
 router.put('/users/:userId/role',
- verifyAuth,
- requireEmailVerified,
- requireRole(['admin']),
- authController.updateUserRole
+  verifyAuth,
+  requireEmailVerified,
+  requireRole(['admin']),
+  authController.updateUserRole
 );
 
-// List all users (with pagination)
 router.get('/users',
- verifyAuth,
- requireEmailVerified,
- requireRole(['admin']),
- authController.listUsers
+  verifyAuth,
+  requireEmailVerified,
+  requireRole(['admin']),
+  authController.listUsers
 );
 
-// Debug claims route - use this to set admin privileges
-router.get('/debug-claims', async (req, res) => {
- try {
-   // First check current status
-   const userRecord = await auth.getUser('6JXLOmnd2nf8HtOiSFcR4Ct2ziy1');
-   console.log('Current user record:', userRecord);
-   console.log('Current custom claims:', userRecord.customClaims);
-   
-   // Set admin claims
-   await auth.setCustomUserClaims('6JXLOmnd2nf8HtOiSFcR4Ct2ziy1', {
-     role: 'admin',
-     lastLogin: new Date().toISOString()
-   });
+router.post('/verify-email', async (req, res) => {
+  try {
+    const { token } = req.body;
+    
+    if (!token) {
+      return res.status(400).json({
+        error: 'Verification token is required'
+      });
+    }
 
-   // Verify the update
-   const updatedUser = await auth.getUser('6JXLOmnd2nf8HtOiSFcR4Ct2ziy1');
-   
-   // Return before and after state
-   res.json({
-     message: 'Admin privileges updated successfully',
-     before: userRecord.customClaims,
-     after: updatedUser.customClaims,
-     success: true
-   });
+    const decodedToken = await auth.verifyIdToken(token);
+    await auth.updateUser(decodedToken.uid, {
+      emailVerified: true
+    });
 
- } catch (error) {
-   console.error('Debug claims error:', error);
-   res.status(500).json({ 
-     error: error.message,
-     details: error.stack 
-   });
- }
+    res.json({ message: 'Email verified successfully' });
+  } catch (error) {
+    console.error('Email verification error:', error);
+    res.status(400).json({
+      error: 'Invalid or expired verification token'
+    });
+  }
 });
 
-// Add a route to verify current claims
-router.get('/verify-claims', verifyAuth, async (req, res) => {
- try {
-   const { uid } = req.user;
-   const userRecord = await auth.getUser(uid);
-   res.json({
-     uid: userRecord.uid,
-     email: userRecord.email,
-     customClaims: userRecord.customClaims,
-     currentUser: req.user
-   });
- } catch (error) {
-   console.error('Verify claims error:', error);
-   res.status(500).json({ error: error.message });
- }
+router.post('/complete-registration', async (req, res) => {
+  try {
+    const { token, uid } = req.body;
+
+    if (!token || !uid) {
+      return res.status(400).json({
+        error: 'Token and user ID are required'
+      });
+    }
+
+    const tokenDoc = await db.collection('registrationTokens').doc(token).get();
+    if (!tokenDoc.exists) {
+      return res.status(404).json({
+        error: 'Invalid registration token'
+      });
+    }
+
+    const tokenData = tokenDoc.data();
+    if (tokenData.used) {
+      return res.status(400).json({
+        error: 'Registration token has already been used'
+      });
+    }
+
+    await tokenDoc.ref.update({
+      used: true,
+      usedAt: new Date(),
+      usedBy: uid
+    });
+
+    // Create user document in users collection
+    await db.collection('users').doc(uid).set({
+      email: tokenData.email,
+      role: 'user',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    res.json({ message: 'Registration completed successfully' });
+  } catch (error) {
+    console.error('Complete registration error:', error);
+    res.status(500).json({
+      error: 'Failed to complete registration'
+    });
+  }
 });
 
-/**
-* Error handling for auth routes
-*/
-router.use((err, req, res, next) => {
- console.error('Auth Route Error:', err);
- 
- // Handle specific errors
- if (err.name === 'ValidationError') {
-   return res.status(400).json({
-     error: {
-       message: 'Validation failed',
-       details: err.details,
-       code: 'auth/validation-failed'
-     }
-   });
- }
-
- // Default error response
- res.status(err.statusCode || 500).json({
-   error: {
-     message: err.message || 'Internal server error',
-     code: err.code || 'auth/unknown-error'
-   }
- });
-});
 
 export default router;

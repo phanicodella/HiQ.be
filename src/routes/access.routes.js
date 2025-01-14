@@ -15,6 +15,10 @@ router.get('/requests',
   accessController.listRequests
 );
 
+// router.post('/auth/verify-token',
+//   accessController.verifyToken.bind(accessController)
+// );
+
 router.post('/requests/:requestId/approve',
   verifyAuth,
   requireRole(['admin']),
