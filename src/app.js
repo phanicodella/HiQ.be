@@ -15,7 +15,6 @@ import accessRoutes from './routes/access.routes.js';
 // Load environment variables
 dotenv.config();
 process.env.NODE_ENV = 'development';
-const cors = require('cors');
 
 const allowedOrigins = process.env.CORS_ORIGINS.split(',').map(origin => origin.trim());
 
