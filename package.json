@@ -8,7 +8,9 @@
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
     "build": "echo \"No build step required for backend\"",
-    "test": "echo \"No test specified\" && exit 0"
+    "test": "echo \"No test specified\" && exit 0",
+     "setup-admin": "node scripts/setupAdmin.js",
+    "update-admin": "node scripts/setupAdmin.js --update"
   },
   "dependencies": {
     "@aws-sdk/client-rekognition": "^3.721.0",
