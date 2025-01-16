@@ -15,6 +15,9 @@ import accessRoutes from './routes/access.routes.js';
 // Load environment variables
 dotenv.config();
 process.env.NODE_ENV = 'development';
+const cors = require('cors');
+
+const allowedOrigins = process.env.CORS_ORIGINS.split(',').map(origin => origin.trim());
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -25,9 +28,18 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Security middleware
 app.use(helmet());
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3001',
-  credentials: true
+  origin: function(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 // Compression
